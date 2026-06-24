@@ -6,10 +6,11 @@ const CHAIN_TOL = 0.5  // mm tolerance for endpoint matching
 
 // ── Arc helpers ──────────────────────────────────────────────────────────────
 
-function arcPoints(cx, cy, radius, startDeg, endDeg, ccw = false) {
+// dxf-parser returns startAngle/endAngle in RADIANS already
+function arcPointsRad(cx, cy, radius, startRad, endRad, ccw = false) {
   const pts = []
-  let s = (startDeg * Math.PI) / 180
-  let e = (endDeg * Math.PI) / 180
+  let s = startRad
+  let e = endRad
   if (!ccw && e <= s + 1e-9) e += Math.PI * 2
   if (ccw && e >= s - 1e-9) e -= Math.PI * 2
   const steps = Math.max(4, Math.round(Math.abs(e - s) * (ARC_SEGMENTS / (Math.PI * 2))))
@@ -18,6 +19,15 @@ function arcPoints(cx, cy, radius, startDeg, endDeg, ccw = false) {
     pts.push({ x: cx + radius * Math.cos(t), y: cy + radius * Math.sin(t) })
   }
   return pts
+}
+
+// Helper for degree inputs (used for circles and bulge arcs)
+function arcPointsDeg(cx, cy, radius, startDeg, endDeg, ccw = false) {
+  return arcPointsRad(cx, cy, radius,
+    (startDeg * Math.PI) / 180,
+    (endDeg * Math.PI) / 180,
+    ccw
+  )
 }
 
 // ── Spline evaluation (cubic B-spline via de Boor) ───────────────────────────
@@ -108,7 +118,8 @@ function entityToSegment(entity) {
   }
 
   if (entity.type === 'ARC') {
-    return arcPoints(
+    // dxf-parser already converts angles to radians
+    return arcPointsRad(
       entity.center.x, entity.center.y, entity.radius,
       entity.startAngle, entity.endAngle, false
     )
@@ -137,9 +148,9 @@ function entityToSegment(entity) {
         const dx = x2 - x1, dy = y2 - y1
         const cx = midX - sign * (dy / d) * Math.sqrt(Math.max(0, r * r - (d / 2) ** 2))
         const cy = midY + sign * (dx / d) * Math.sqrt(Math.max(0, r * r - (d / 2) ** 2))
-        const startA = (Math.atan2(y1 - cy, x1 - cx) * 180) / Math.PI
-        const endA = (Math.atan2(y2 - cy, x2 - cx) * 180) / Math.PI
-        const arcPts = arcPoints(cx, cy, r, startA, endA, b < 0)
+        const startA = Math.atan2(y1 - cy, x1 - cx)
+        const endA = Math.atan2(y2 - cy, x2 - cx)
+        const arcPts = arcPointsRad(cx, cy, r, startA, endA, b < 0)
         arcPts.shift() // remove duplicate start
         pts.push(...arcPts)
       }
@@ -149,7 +160,7 @@ function entityToSegment(entity) {
   }
 
   if (entity.type === 'CIRCLE') {
-    return arcPoints(entity.center.x, entity.center.y, entity.radius, 0, 359.999)
+    return arcPointsDeg(entity.center.x, entity.center.y, entity.radius, 0, 359.999)
   }
 
   if (entity.type === 'ELLIPSE') {
