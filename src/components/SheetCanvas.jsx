@@ -64,6 +64,31 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
 
   const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }) }
 
+  // Fit view to placed parts if any, otherwise fit sheet
+  const fitView = () => {
+    const placed = nestedParts.filter(p => p.placed && p.polygon)
+    if (!placed.length) { resetView(); return }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const p of placed) {
+      for (const pt of p.polygon) {
+        if (pt.x < minX) minX = pt.x
+        if (pt.y < minY) minY = pt.y
+        if (pt.x > maxX) maxX = pt.x
+        if (pt.y > maxY) maxY = pt.y
+      }
+    }
+    const pw = maxX - minX, ph = maxY - minY
+    if (pw < 1 || ph < 1) { resetView(); return }
+    const newZoom = Math.min(
+      (CANVAS_W - PADDING * 4) / (pw * baseScale),
+      (CANVAS_H - PADDING * 4) / (ph * baseScale)
+    ) * 0.9
+    const newPanX = (CANVAS_W / 2) - (minX + pw / 2) * baseScale * newZoom - PADDING
+    const newPanY = (CANVAS_H / 2) - (sheetConfig.height - (minY + ph / 2)) * baseScale * newZoom - PADDING
+    setZoom(newZoom)
+    setPan({ x: newPanX, y: newPanY })
+  }
+
   const gridStep = zoom < 0.3 ? 500 : zoom < 0.8 ? 200 : 100
 
   return (
@@ -72,7 +97,8 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
         <span className="zoom-label">{Math.round(zoom * 100)}%</span>
         <button className="btn-sm" onClick={() => setZoom(z => Math.min(MAX_SCALE, z * 1.3))}>+</button>
         <button className="btn-sm" onClick={() => setZoom(z => Math.max(MIN_SCALE, z / 1.3))}>−</button>
-        <button className="btn-sm" onClick={resetView}>Fit</button>
+        <button className="btn-sm" onClick={fitView}>Fit</button>
+        <button className="btn-sm" onClick={resetView}>Sheet</button>
         <span className="canvas-hint">Scroll to zoom · Drag sheet to pan</span>
       </div>
 
