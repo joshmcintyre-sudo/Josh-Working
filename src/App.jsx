@@ -4,7 +4,7 @@ import SheetCanvas from './components/SheetCanvas.jsx'
 import SheetConfig from './components/SheetConfig.jsx'
 import ToolProfiles from './components/ToolProfiles.jsx'
 import PartsList from './components/PartsList.jsx'
-import { parseDxf, normalizePolygon, getPolygonBounds } from './lib/dxfParser.js'
+import { parseDxf, normalizePolygon, getPolygonBounds, rotatePolygon } from './lib/dxfParser.js'
 import { nestParts, computeSheetUtilization } from './lib/nesting.js'
 import { generateGCode, DEFAULT_TOOL_PROFILES } from './lib/gcodeGenerator.js'
 import { computeBridgePositions } from './lib/gcodeGenerator.js'
@@ -136,6 +136,18 @@ export default function App() {
     }))
   }
 
+  const handlePartRotate = (placedIdx, angleDeg) => {
+    setNestedParts(prev => prev.map((p, i) => {
+      if (i !== placedIdx || !p.placed) return p
+      // Get current bounding box min to restore position after rotation
+      const b = getPolygonBounds(p.polygon)
+      const rotated = rotatePolygon(p.polygon, angleDeg)
+      // Restore to original top-left position
+      const shifted = rotated.map(pt => ({ x: pt.x + b.minX, y: pt.y + b.minY }))
+      return { ...p, polygon: shifted }
+    }))
+  }
+
   const placedCount = nestedParts.filter(p => p.placed).length
   const unplacedCount = nestedParts.filter(p => !p.placed).length
 
@@ -203,6 +215,7 @@ export default function App() {
               nestedParts={nestedParts}
               toolProfiles={toolProfiles}
               onPartMove={handlePartMove}
+              onPartRotate={handlePartRotate}
             />
           )}
 

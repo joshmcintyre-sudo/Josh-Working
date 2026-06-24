@@ -1,217 +1,369 @@
-import { Stage, Layer, Rect, Line, Text, Group, Circle } from 'react-konva'
-import { useMemo, useRef, useState, useCallback } from 'react'
+import { Stage, Layer, Rect, Line, Circle, Group, Text, Arrow } from 'react-konva'
+import { useRef, useState, useCallback, useEffect } from 'react'
+import { rotatePolygon, getPolygonBounds } from '../lib/dxfParser.js'
 
 const CANVAS_W = 900
-const CANVAS_H = 620
-const PADDING = 48
-const MIN_SCALE = 0.1
-const MAX_SCALE = 20
+const CANVAS_H = 640
 
-export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, onPartMove }) {
+export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, onPartMove, onPartRotate }) {
   const stageRef = useRef()
-  const [zoom, setZoom] = useState(1)
-  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)          // just for label display
+  const [selectedIdx, setSelectedIdx] = useState(null)
 
-  const baseScale = useMemo(() => {
-    const sx = (CANVAS_W - PADDING * 2) / sheetConfig.width
-    const sy = (CANVAS_H - PADDING * 2) / sheetConfig.height
-    return Math.min(sx, sy)
-  }, [sheetConfig])
+  // Simulation
+  const [simState, setSimState] = useState('idle') // idle | playing | paused
+  const [simStep, setSimStep] = useState(0)
+  const [simSpeed, setSimSpeed] = useState(5)
+  const simRef = useRef({ running: false, step: 0, timer: null })
+  const waypointsRef = useRef([])
 
-  const scale = baseScale * zoom
+  // ── Base scale: fit sheet into canvas ──────────────────────────────────────
+  const baseScale = Math.min(
+    (CANVAS_W - 80) / sheetConfig.width,
+    (CANVAS_H - 80) / sheetConfig.height,
+  )
 
-  const toCanvas = useCallback((x, y) => ({
-    x: PADDING + pan.x + x * scale,
-    y: PADDING + pan.y + (sheetConfig.height - y) * scale,
-  }), [scale, pan, sheetConfig.height])
-
-  const polyToFlat = useCallback((poly) => {
-    const pts = []
-    for (const p of poly) {
-      const c = toCanvas(p.x, p.y)
-      pts.push(c.x, c.y)
+  // ── Fit view to placed parts ───────────────────────────────────────────────
+  const fitParts = useCallback(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const placed = nestedParts.filter(p => p.placed && p.polygon)
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    const source = placed.length ? placed : [{ polygon: [
+      { x: 0, y: 0 }, { x: sheetConfig.width, y: 0 },
+      { x: sheetConfig.width, y: sheetConfig.height }, { x: 0, y: sheetConfig.height },
+    ]}]
+    for (const p of source) for (const pt of p.polygon) {
+      if (pt.x < minX) minX = pt.x; if (pt.y < minY) minY = pt.y
+      if (pt.x > maxX) maxX = pt.x; if (pt.y > maxY) maxY = pt.y
     }
-    if (poly.length > 0) {
-      const c = toCanvas(poly[0].x, poly[0].y)
-      pts.push(c.x, c.y)
-    }
-    return pts
-  }, [toCanvas])
+    const pw = maxX - minX || 1, ph = maxY - minY || 1
+    const s = Math.min((CANVAS_W - 80) / pw, (CANVAS_H - 80) / ph) * 0.9
+    // account for Y-flip group: world Y=0 is at screen y = 40 + sheetConfig.height*s
+    const cx = 40 + (minX + pw / 2) * s
+    const cy = 40 + (sheetConfig.height - (minY + ph / 2)) * s
+    stage.scale({ x: s, y: s })
+    stage.position({ x: CANVAS_W / 2 - cx * (s / s), y: CANVAS_H / 2 - cy * (s / s) })
+    // simpler: translate so bounding centre hits canvas centre
+    stage.position({
+      x: CANVAS_W / 2 - (40 + (minX + pw / 2) * s),
+      y: CANVAS_H / 2 - (40 + (sheetConfig.height - (minY + ph / 2)) * s),
+    })
+    setZoom(s)
+    stage.batchDraw()
+  }, [nestedParts, sheetConfig])
 
-  const profileById = (id) => toolProfiles.find(t => t.id === id)
+  const fitSheet = useCallback(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    stage.scale({ x: baseScale, y: baseScale })
+    stage.position({ x: 0, y: 0 })
+    setZoom(baseScale)
+    stage.batchDraw()
+  }, [baseScale])
 
-  const sheetOrigin = toCanvas(0, 0)
-  const sheetW = sheetConfig.width * scale
-  const sheetH = sheetConfig.height * scale
-
-  // Mouse wheel zoom centred on cursor
-  const handleWheel = (e) => {
+  // ── Wheel zoom centred on cursor ───────────────────────────────────────────
+  const handleWheel = useCallback((e) => {
     e.evt.preventDefault()
     const stage = stageRef.current
+    const oldScale = stage.scaleX()
     const pointer = stage.getPointerPosition()
-    const factor = e.evt.deltaY < 0 ? 1.15 : 1 / 1.15
-    const newZoom = Math.min(MAX_SCALE, Math.max(MIN_SCALE, zoom * factor))
+    const factor = e.evt.deltaY < 0 ? 1.12 : 1 / 1.12
+    const newScale = Math.min(200, Math.max(0.005, oldScale * factor))
+    const mx = (pointer.x - stage.x()) / oldScale
+    const my = (pointer.y - stage.y()) / oldScale
+    stage.scale({ x: newScale, y: newScale })
+    stage.position({ x: pointer.x - mx * newScale, y: pointer.y - my * newScale })
+    setZoom(newScale)
+    stage.batchDraw()
+  }, [])
 
-    // Adjust pan so zoom centres on cursor
-    const mouseX = pointer.x - PADDING
-    const mouseY = pointer.y - PADDING
-    const newPanX = mouseX - (mouseX - pan.x) * (newZoom / zoom)
-    const newPanY = mouseY - (mouseY - pan.y) * (newZoom / zoom)
+  // ── Simulation waypoints ───────────────────────────────────────────────────
+  const buildWaypoints = useCallback(() => {
+    const wpts = [{ x: 0, y: 0, type: 'rapid' }]
+    const profileById = id => toolProfiles.find(t => t.id === id) || toolProfiles[0]
 
-    setZoom(newZoom)
-    setPan({ x: newPanX, y: newPanY })
-  }
+    // Group by tool
+    const byTool = {}
+    for (const placed of nestedParts) {
+      if (!placed.placed) continue
+      const pid = placed.toolProfileId
+      if (!byTool[pid]) byTool[pid] = []
+      byTool[pid].push(placed)
+    }
 
-  const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }) }
-
-  // Fit view to placed parts if any, otherwise fit sheet
-  const fitView = () => {
-    const placed = nestedParts.filter(p => p.placed && p.polygon)
-    if (!placed.length) { resetView(); return }
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (const p of placed) {
-      for (const pt of p.polygon) {
-        if (pt.x < minX) minX = pt.x
-        if (pt.y < minY) minY = pt.y
-        if (pt.x > maxX) maxX = pt.x
-        if (pt.y > maxY) maxY = pt.y
+    for (const [pid, parts] of Object.entries(byTool)) {
+      const profile = profileById(pid)
+      const passes = Math.ceil(profile.totalDepth / profile.depthPerPass)
+      for (const placed of parts) {
+        const poly = placed.polygon
+        if (!poly || poly.length < 2) continue
+        for (let pass = 0; pass < passes; pass++) {
+          wpts.push({ x: poly[0].x, y: poly[0].y, type: 'rapid', toolColor: profile.color })
+          for (let i = 1; i < poly.length; i++) {
+            wpts.push({ x: poly[i].x, y: poly[i].y, type: 'cut', toolColor: profile.color })
+          }
+          wpts.push({ x: poly[0].x, y: poly[0].y, type: 'cut', toolColor: profile.color })
+          wpts.push({ x: poly[0].x, y: poly[0].y, type: 'rapid', toolColor: profile.color })
+        }
       }
     }
-    const pw = maxX - minX, ph = maxY - minY
-    if (pw < 1 || ph < 1) { resetView(); return }
-    const newZoom = Math.min(
-      (CANVAS_W - PADDING * 4) / (pw * baseScale),
-      (CANVAS_H - PADDING * 4) / (ph * baseScale)
-    ) * 0.9
-    const newPanX = (CANVAS_W / 2) - (minX + pw / 2) * baseScale * newZoom - PADDING
-    const newPanY = (CANVAS_H / 2) - (sheetConfig.height - (minY + ph / 2)) * baseScale * newZoom - PADDING
-    setZoom(newZoom)
-    setPan({ x: newPanX, y: newPanY })
+    wpts.push({ x: 0, y: 0, type: 'rapid' })
+    return wpts
+  }, [nestedParts, toolProfiles])
+
+  const startSim = () => {
+    const wpts = buildWaypoints()
+    waypointsRef.current = wpts
+    simRef.current.step = 0
+    simRef.current.running = true
+    setSimStep(0)
+    setSimState('playing')
   }
 
-  const gridStep = zoom < 0.3 ? 500 : zoom < 0.8 ? 200 : 100
+  const pauseSim = () => {
+    simRef.current.running = false
+    setSimState('paused')
+  }
+
+  const resumeSim = () => {
+    simRef.current.running = true
+    setSimState('playing')
+  }
+
+  const stopSim = () => {
+    simRef.current.running = false
+    simRef.current.step = 0
+    setSimStep(0)
+    setSimState('idle')
+  }
+
+  useEffect(() => {
+    if (simState !== 'playing') return
+    const interval = setInterval(() => {
+      if (!simRef.current.running) return
+      simRef.current.step += simSpeed
+      const max = waypointsRef.current.length - 1
+      if (simRef.current.step >= max) {
+        simRef.current.step = max
+        simRef.current.running = false
+        setSimState('idle')
+      }
+      setSimStep(simRef.current.step)
+    }, 16)
+    return () => clearInterval(interval)
+  }, [simState, simSpeed])
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const profileById = id => toolProfiles.find(t => t.id === id) || toolProfiles[0]
+
+  const polyFlat = poly => poly.flatMap(p => [p.x, p.y])
+
+  const gridStep = (stageRef.current ? stageRef.current.scaleX() : baseScale) < 0.05 ? 500
+    : (stageRef.current ? stageRef.current.scaleX() : baseScale) < 0.15 ? 200 : 100
+
+  // ── Simulation geometry ───────────────────────────────────────────────────
+  const wpts = waypointsRef.current
+  const curStep = Math.min(simStep, wpts.length - 1)
+  const toolPos = wpts[curStep] || { x: 0, y: 0 }
+  const cutPts = []
+  const rapidPts = []
+  for (let i = 0; i < curStep; i++) {
+    const a = wpts[i], b = wpts[i + 1]
+    if (b.type === 'cut') cutPts.push(a.x, a.y, b.x, b.y)
+    else rapidPts.push(a.x, a.y, b.x, b.y)
+  }
+
+  const zoomPct = Math.round((stageRef.current ? stageRef.current.scaleX() : baseScale) * 100)
 
   return (
     <div className="canvas-wrap">
+      {/* Toolbar */}
       <div className="canvas-toolbar">
-        <span className="zoom-label">{Math.round(zoom * 100)}%</span>
-        <button className="btn-sm" onClick={() => setZoom(z => Math.min(MAX_SCALE, z * 1.3))}>+</button>
-        <button className="btn-sm" onClick={() => setZoom(z => Math.max(MIN_SCALE, z / 1.3))}>−</button>
-        <button className="btn-sm" onClick={fitView}>Fit</button>
-        <button className="btn-sm" onClick={resetView}>Sheet</button>
-        <span className="canvas-hint">Scroll to zoom · Drag sheet to pan</span>
+        <span className="zoom-label">{zoomPct}%</span>
+        <button className="btn-sm" onClick={() => {
+          const s = stageRef.current; if (!s) return
+          const ns = Math.min(200, s.scaleX() * 1.25)
+          const cx = CANVAS_W/2, cy = CANVAS_H/2
+          const mx = (cx - s.x()) / s.scaleX()
+          const my = (cy - s.y()) / s.scaleX()
+          s.scale({ x: ns, y: ns }); s.position({ x: cx - mx*ns, y: cy - my*ns })
+          setZoom(ns)
+        }}>+</button>
+        <button className="btn-sm" onClick={() => {
+          const s = stageRef.current; if (!s) return
+          const ns = Math.max(0.005, s.scaleX() / 1.25)
+          const cx = CANVAS_W/2, cy = CANVAS_H/2
+          const mx = (cx - s.x()) / s.scaleX()
+          const my = (cy - s.y()) / s.scaleX()
+          s.scale({ x: ns, y: ns }); s.position({ x: cx - mx*ns, y: cy - my*ns })
+          setZoom(ns)
+        }}>−</button>
+        <button className="btn-sm" onClick={fitParts}>Fit</button>
+        <button className="btn-sm" onClick={fitSheet}>Sheet</button>
+
+        {/* Part controls when selected */}
+        {selectedIdx !== null && (
+          <>
+            <span className="toolbar-sep" />
+            <span className="zoom-label" style={{ color: '#a5b4fc' }}>Part selected</span>
+            <button className="btn-sm" onClick={() => onPartRotate && onPartRotate(selectedIdx, -90)}>↺ 90°</button>
+            <button className="btn-sm" onClick={() => onPartRotate && onPartRotate(selectedIdx, 90)}>↻ 90°</button>
+            <button className="btn-sm" onClick={() => setSelectedIdx(null)}>Deselect</button>
+          </>
+        )}
+
+        {/* Simulation controls */}
+        {nestedParts.some(p => p.placed) && (
+          <>
+            <span className="toolbar-sep" />
+            {simState === 'idle' && (
+              <button className="btn-sm btn-sim" onClick={startSim}>▶ Simulate</button>
+            )}
+            {simState === 'playing' && (
+              <button className="btn-sm btn-sim" onClick={pauseSim}>⏸ Pause</button>
+            )}
+            {simState === 'paused' && (
+              <button className="btn-sm btn-sim" onClick={resumeSim}>▶ Resume</button>
+            )}
+            {simState !== 'idle' && (
+              <button className="btn-sm" onClick={stopSim}>⏹</button>
+            )}
+            <label className="zoom-label">Speed</label>
+            <input
+              type="range" min={1} max={50} value={simSpeed}
+              onChange={e => setSimSpeed(Number(e.target.value))}
+              style={{ width: 70 }}
+            />
+          </>
+        )}
+
+        <span className="canvas-hint">Scroll zoom · Drag pan · Click part to select</span>
       </div>
 
       <Stage
+        ref={stageRef}
         width={CANVAS_W}
         height={CANVAS_H}
-        ref={stageRef}
+        scaleX={baseScale}
+        scaleY={baseScale}
         style={{ background: '#0f0f1a', cursor: 'grab' }}
-        onWheel={handleWheel}
         draggable
-        onDragEnd={(e) => {
-          setPan(prev => ({
-            x: prev.x + e.target.x(),
-            y: prev.y + e.target.y(),
-          }))
-          e.target.position({ x: 0, y: 0 })
+        onWheel={handleWheel}
+        onDragEnd={() => {
+          // sync zoom label only — DO NOT reset stage position
+          setZoom(stageRef.current?.scaleX() ?? baseScale)
+        }}
+        onClick={e => {
+          if (e.target === e.target.getStage()) setSelectedIdx(null)
         }}
       >
         <Layer>
-          {/* Sheet */}
-          <Rect
-            x={sheetOrigin.x}
-            y={sheetOrigin.y - sheetH}
-            width={sheetW}
-            height={sheetH}
-            fill="#1e1e35"
-            stroke="#4a4a6e"
-            strokeWidth={1}
-          />
+          {/* Y-flip group: world Y=0 at bottom-left */}
+          <Group y={sheetConfig.height} scaleY={-1}>
 
-          {/* Grid */}
-          {Array.from({ length: Math.floor(sheetConfig.width / gridStep) }).map((_, i) => {
-            const cx = sheetOrigin.x + (i + 1) * gridStep * scale
-            return (
-              <Line key={`gx-${i}`}
-                points={[cx, sheetOrigin.y - sheetH, cx, sheetOrigin.y]}
-                stroke="#2a2a50" strokeWidth={0.5} />
-            )
-          })}
-          {Array.from({ length: Math.floor(sheetConfig.height / gridStep) }).map((_, i) => {
-            const cy = sheetOrigin.y - (i + 1) * gridStep * scale
-            return (
-              <Line key={`gy-${i}`}
-                points={[sheetOrigin.x, cy, sheetOrigin.x + sheetW, cy]}
-                stroke="#2a2a50" strokeWidth={0.5} />
-            )
-          })}
+            {/* Sheet */}
+            <Rect x={0} y={0} width={sheetConfig.width} height={sheetConfig.height}
+              fill="#1e1e35" stroke="#4a4a6e" strokeWidth={1 / baseScale} />
 
-          {/* Margin boundary */}
-          {sheetConfig.margin > 0 && (
-            <Rect
-              x={sheetOrigin.x + sheetConfig.margin * scale}
-              y={sheetOrigin.y - sheetH + sheetConfig.margin * scale}
-              width={sheetW - sheetConfig.margin * 2 * scale}
-              height={sheetH - sheetConfig.margin * 2 * scale}
-              fill="transparent"
-              stroke="#3a3a60"
-              strokeWidth={1}
-              dash={[4, 4]}
-            />
-          )}
+            {/* Grid */}
+            {Array.from({ length: Math.floor(sheetConfig.width / gridStep) }).map((_, i) => (
+              <Line key={`gx${i}`}
+                points={[(i+1)*gridStep, 0, (i+1)*gridStep, sheetConfig.height]}
+                stroke="#252540" strokeWidth={0.5 / baseScale} />
+            ))}
+            {Array.from({ length: Math.floor(sheetConfig.height / gridStep) }).map((_, i) => (
+              <Line key={`gy${i}`}
+                points={[0, (i+1)*gridStep, sheetConfig.width, (i+1)*gridStep]}
+                stroke="#252540" strokeWidth={0.5 / baseScale} />
+            ))}
 
-          {/* Datum label */}
-          <Text x={sheetOrigin.x + 4} y={sheetOrigin.y - 16} text="X0 Y0" fontSize={11} fill="#555" />
+            {/* Margin */}
+            {sheetConfig.margin > 0 && (
+              <Rect x={sheetConfig.margin} y={sheetConfig.margin}
+                width={sheetConfig.width - sheetConfig.margin*2}
+                height={sheetConfig.height - sheetConfig.margin*2}
+                fill="transparent" stroke="#333360" strokeWidth={0.5/baseScale} dash={[4/baseScale, 4/baseScale]} />
+            )}
 
-          {/* Parts */}
-          {nestedParts.map((placed, i) => {
-            if (!placed.placed) return null
-            const profile = profileById(placed.toolProfileId) || toolProfiles[0]
-            const color = profile?.color || '#ffffff'
-            const pts = polyToFlat(placed.polygon)
-            return (
-              <Group key={i}>
-                <Line
-                  points={pts}
-                  fill={color + '28'}
-                  stroke={color}
-                  strokeWidth={Math.max(1, 1.5 / zoom)}
-                  closed
-                />
-                {/* Bridge markers */}
-                {placed.bridges && placed.bridges.map((b, bi) => {
-                  const bc = toCanvas(b.x, b.y)
-                  return (
+            {/* Placed parts */}
+            {nestedParts.map((placed, i) => {
+              if (!placed.placed) return null
+              const profile = profileById(placed.toolProfileId)
+              const color = profile?.color || '#ffffff'
+              const isSelected = selectedIdx === i
+              const pts = polyFlat(placed.polygon)
+
+              return (
+                <Group key={i}>
+                  <Line
+                    points={pts}
+                    fill={isSelected ? color + '55' : color + '22'}
+                    stroke={isSelected ? '#ffffff' : color}
+                    strokeWidth={(isSelected ? 2 : 1.5) / baseScale}
+                    closed
+                    draggable
+                    onClick={(e) => { e.cancelBubble = true; setSelectedIdx(i) }}
+                    onDragEnd={(e) => {
+                      const s = stageRef.current?.scaleX() || baseScale
+                      // Shape is inside scaleY=-1 group, so dy is already world-correct
+                      onPartMove && onPartMove(i, e.target.x(), e.target.y())
+                      e.target.position({ x: 0, y: 0 })
+                    }}
+                  />
+                  {/* Bridge markers */}
+                  {placed.bridges?.map((b, bi) => (
                     <Rect key={bi}
-                      x={bc.x - 4} y={bc.y - 4}
-                      width={8} height={8}
-                      fill="#fbbf24" stroke="#f59e0b" strokeWidth={1}
-                    />
-                  )
-                })}
+                      x={b.x - 3/baseScale} y={b.y - 3/baseScale}
+                      width={6/baseScale} height={6/baseScale}
+                      fill="#fbbf24" stroke="#f59e0b" strokeWidth={0.5/baseScale} />
+                  ))}
+                </Group>
+              )
+            })}
+
+            {/* Simulation: rapid moves */}
+            {simState !== 'idle' && rapidPts.length >= 4 && (
+              <Line points={rapidPts} stroke="#4444aa" strokeWidth={0.8/baseScale} />
+            )}
+            {/* Simulation: cut moves */}
+            {simState !== 'idle' && cutPts.length >= 4 && (
+              <Line points={cutPts} stroke="#00ffcc" strokeWidth={1.2/baseScale} opacity={0.8} />
+            )}
+            {/* Simulation: tool head */}
+            {simState !== 'idle' && (
+              <Group>
+                <Circle x={toolPos.x} y={toolPos.y}
+                  radius={4/baseScale} fill="#ffffff" opacity={0.9} />
+                <Circle x={toolPos.x} y={toolPos.y}
+                  radius={8/baseScale} stroke="#ffffff" strokeWidth={0.5/baseScale} opacity={0.4} />
               </Group>
-            )
-          })}
+            )}
 
-          {/* Unplaced warning */}
-          {nestedParts.some(p => !p.placed) && (
-            <Text
-              x={PADDING} y={12}
-              text={`⚠  ${nestedParts.filter(p => !p.placed).length} part(s) could not fit — reduce gap or increase sheet size`}
-              fontSize={12} fill="#fbbf24"
-            />
-          )}
+          </Group>
 
-          {/* Sheet size label */}
+          {/* Datum label — not Y-flipped */}
           <Text
-            x={sheetOrigin.x + sheetW / 2 - 30}
-            y={sheetOrigin.y + 6}
-            text={`${sheetConfig.width} × ${sheetConfig.height} mm`}
-            fontSize={11} fill="#444"
+            x={4 / baseScale}
+            y={sheetConfig.height + 6 / baseScale}
+            text="X0 Y0" fontSize={10 / baseScale} fill="#555"
           />
         </Layer>
       </Stage>
+
+      {/* Unplaced warning */}
+      {nestedParts.some(p => !p.placed) && (
+        <div className="unplaced-warn">
+          ⚠ {nestedParts.filter(p => !p.placed).length} part(s) could not fit — reduce gap or increase sheet size
+        </div>
+      )}
+
+      {/* Sim progress */}
+      {simState !== 'idle' && waypointsRef.current.length > 0 && (
+        <div className="sim-progress">
+          <div className="sim-bar" style={{ width: `${(curStep / (waypointsRef.current.length-1)) * 100}%` }} />
+        </div>
+      )}
     </div>
   )
 }
