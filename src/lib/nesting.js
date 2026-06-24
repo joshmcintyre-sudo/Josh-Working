@@ -1,6 +1,16 @@
-import { getPolygonBounds, rotatePolygon, translatePolygon, normalizePolygon } from './dxfParser.js'
+import { getPolygonBounds, rotatePolygon, translatePolygon } from './dxfParser.js'
 
-// Separating Axis Theorem polygon intersection test
+// AABB broad-phase check with gap
+function aabbOverlap(boundsA, boundsB, gap) {
+  return !(
+    boundsA.maxX + gap <= boundsB.minX ||
+    boundsB.maxX + gap <= boundsA.minX ||
+    boundsA.maxY + gap <= boundsB.minY ||
+    boundsB.maxY + gap <= boundsA.minY
+  )
+}
+
+// Separating Axis Theorem narrow-phase
 function projectPolygon(poly, axis) {
   let min = Infinity, max = -Infinity
   for (const p of poly) {
@@ -24,101 +34,101 @@ function getAxes(poly) {
   return axes
 }
 
-function polygonsOverlap(polyA, polyB) {
+function polygonsOverlapSAT(polyA, polyB, gap) {
+  // Expand one polygon's projection by gap to enforce clearance
   const axes = [...getAxes(polyA), ...getAxes(polyB)]
   for (const axis of axes) {
     const a = projectPolygon(polyA, axis)
     const b = projectPolygon(polyB, axis)
-    if (a.max <= b.min || b.max <= a.min) return false
+    if (a.max + gap <= b.min || b.max + gap <= a.min) return false
   }
   return true
 }
 
-function polygonInsideSheet(poly, sheetW, sheetH, margin = 0) {
-  for (const p of poly) {
-    if (p.x < margin || p.y < margin || p.x > sheetW - margin || p.y > sheetH - margin) {
-      return false
-    }
-  }
-  return true
+function insideSheet(bounds, sheetW, sheetH, margin) {
+  return (
+    bounds.minX >= margin &&
+    bounds.minY >= margin &&
+    bounds.maxX <= sheetW - margin &&
+    bounds.maxY <= sheetH - margin
+  )
 }
 
-// Grid-based bottom-left placement with kerf offset
-export function nestParts(parts, sheetW, sheetH, gap, allowedRotations = [0, 90, 180, 270]) {
-  const placed = [] // { polygon, partIndex, rotation, x, y }
+export function nestParts(parts, sheetW, sheetH, gap, margin = 0, allowedRotations = [0, 90, 180, 270]) {
+  // Each entry: { polygon, bounds, toolProfileId, partIndex, rotation }
+  const placed = []
   const results = []
-  const GRID = Math.max(1, Math.min(10, gap > 0 ? gap : 5))
 
-  // Sort parts largest area first
+  // Finer grid for small parts — use smaller of gap or 5mm
+  const GRID = Math.max(1, Math.min(5, gap > 0 ? gap / 2 : 3))
+
+  // Sort largest bounding area first
   const sorted = parts
-    .map((p, i) => ({ part: p, idx: i }))
+    .map((p, i) => ({ part: p, origIdx: i }))
     .sort((a, b) => {
       const ba = getPolygonBounds(a.part.polygon)
       const bb = getPolygonBounds(b.part.polygon)
       return bb.width * bb.height - ba.width * ba.height
     })
 
-  for (const { part, idx } of sorted) {
+  for (const { part, origIdx } of sorted) {
     let bestPlacement = null
 
     for (const rot of allowedRotations) {
+      if (bestPlacement) break
+
       const rotPoly = rotatePolygon(part.polygon, rot)
-      const bounds = getPolygonBounds(rotPoly)
+      const rotBounds = getPolygonBounds(rotPoly)
 
-      if (bounds.width + gap > sheetW || bounds.height + gap > sheetH) continue
+      // Skip if part can't possibly fit on sheet
+      if (rotBounds.width + gap * 2 > sheetW - margin * 2) continue
+      if (rotBounds.height + gap * 2 > sheetH - margin * 2) continue
 
-      let found = false
-      // Bottom-left fill: scan y then x
-      for (let gy = 0; gy <= sheetH - bounds.height && !found; gy += GRID) {
-        for (let gx = 0; gx <= sheetW - bounds.width && !found; gx += GRID) {
+      // Scan bottom-left to top-right
+      outer:
+      for (let gy = margin; gy <= sheetH - margin - rotBounds.height; gy += GRID) {
+        for (let gx = margin; gx <= sheetW - margin - rotBounds.width; gx += GRID) {
           const candidate = translatePolygon(rotPoly, gx, gy)
+          const candidateBounds = getPolygonBounds(candidate)
 
-          if (!polygonInsideSheet(candidate, sheetW, sheetH)) continue
-
-          // Expand by kerf/gap for clearance check
-          const gapPoly = expandPolygonSimple(candidate, gap / 2)
+          if (!insideSheet(candidateBounds, sheetW, sheetH, margin)) continue
 
           let collision = false
           for (const p of placed) {
-            const existingGap = expandPolygonSimple(p.polygon, gap / 2)
-            if (polygonsOverlap(gapPoly, existingGap)) {
+            // Broad phase first — fast AABB check
+            if (!aabbOverlap(candidateBounds, p.bounds, gap)) continue
+            // Narrow phase — SAT with gap enforcement
+            if (polygonsOverlapSAT(candidate, p.polygon, gap)) {
               collision = true
               break
             }
           }
 
           if (!collision) {
-            bestPlacement = { polygon: candidate, partIndex: idx, rotation: rot, x: gx, y: gy }
-            found = true
+            bestPlacement = {
+              polygon: candidate,
+              bounds: candidateBounds,
+              partIndex: origIdx,
+              toolProfileId: part.toolProfileId,
+              rotation: rot,
+              x: gx,
+              y: gy,
+            }
+            break outer
           }
         }
       }
-
-      if (bestPlacement) break
     }
 
     if (bestPlacement) {
       placed.push(bestPlacement)
-      results.push({ ...bestPlacement, placed: true, partIndex: idx })
+      results.push({ ...bestPlacement, placed: true })
     } else {
-      results.push({ placed: false, partIndex: idx })
+      results.push({ placed: false, partIndex: origIdx, toolProfileId: part.toolProfileId })
     }
   }
 
   return results
-}
-
-// Simple inward/outward polygon expansion (Minkowski sum approximation)
-function expandPolygonSimple(poly, amount) {
-  if (amount === 0) return poly
-  const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length
-  const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length
-  return poly.map(p => {
-    const dx = p.x - cx, dy = p.y - cy
-    const len = Math.sqrt(dx * dx + dy * dy)
-    if (len < 1e-9) return p
-    return { x: p.x + (dx / len) * amount, y: p.y + (dy / len) * amount }
-  })
 }
 
 export function computeSheetUtilization(placedResults, sheetW, sheetH) {

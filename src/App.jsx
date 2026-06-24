@@ -70,15 +70,12 @@ export default function App() {
         const usableW = sheetConfig.width - sheetConfig.margin * 2
         const usableH = sheetConfig.height - sheetConfig.margin * 2
 
-        const rawResults = nestParts(expanded, usableW, usableH, sheetConfig.gap)
+        const rawResults = nestParts(expanded, sheetConfig.width, sheetConfig.height, sheetConfig.gap, sheetConfig.margin)
 
-        // Shift results to account for margin
+        // Nesting already places within margin; just attach bridge markers
         const results = rawResults.map(r => {
           if (!r.placed) return r
-          const shifted = r.polygon.map(p => ({
-            x: p.x + sheetConfig.margin,
-            y: p.y + sheetConfig.margin,
-          }))
+          const shifted = r.polygon
 
           // Add bridge markers for display
           const profile = toolProfiles.find(t => t.id === r.toolProfileId) || toolProfiles[0]
@@ -201,7 +198,7 @@ export default function App() {
               <div className="empty-sub">Configure your sheet and tool profiles, then click Auto Nest</div>
             </div>
           ) : (
-            <SheetCanvas
+              <SheetCanvas
               sheetConfig={sheetConfig}
               nestedParts={nestedParts}
               toolProfiles={toolProfiles}
