@@ -9,6 +9,7 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
   const stageRef = useRef()
   const [zoom, setZoom] = useState(1)          // just for label display
   const [selectedIdx, setSelectedIdx] = useState(null)
+  const [moveMode, setMoveMode] = useState(false)
 
   // Simulation
   const [simState, setSimState] = useState('idle') // idle | playing | paused
@@ -203,8 +204,17 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
         <button className="btn-sm" onClick={fitParts}>Fit</button>
         <button className="btn-sm" onClick={fitSheet}>Sheet</button>
 
+        <span className="toolbar-sep" />
+        <button
+          className={`btn-sm${moveMode ? ' btn-active' : ''}`}
+          onClick={() => { setMoveMode(m => !m); setSelectedIdx(null) }}
+          title="Toggle manual part movement"
+        >
+          {moveMode ? '🔓 Move On' : '🔒 Move Off'}
+        </button>
+
         {/* Part controls when selected */}
-        {selectedIdx !== null && (
+        {moveMode && selectedIdx !== null && (
           <>
             <span className="toolbar-sep" />
             <span className="zoom-label" style={{ color: '#a5b4fc' }}>Part selected</span>
@@ -303,8 +313,8 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
                     stroke={isSelected ? '#ffffff' : color}
                     strokeWidth={isSelected ? sw * 2 : sw * 1.5}
                     closed
-                    draggable
-                    onClick={(e) => { e.cancelBubble = true; setSelectedIdx(i) }}
+                    draggable={moveMode}
+                    onClick={(e) => { if (!moveMode) return; e.cancelBubble = true; setSelectedIdx(i) }}
                     onDragEnd={(e) => {
                       onPartMove && onPartMove(i, e.target.x(), e.target.y())
                       e.target.position({ x: 0, y: 0 })
