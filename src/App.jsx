@@ -14,7 +14,12 @@ const DEFAULT_SHEET = {
   height: 1220,
   gap: 8,
   margin: 10,
-  datum: 'bottom-left',
+  thickness: 12,
+  material: '12mm Plywood',
+  safeZ: 33,
+  datumCorner: 'bottom-left',
+  datumX: 0,
+  datumY: 0,
   units: 'mm',
 }
 
@@ -128,23 +133,38 @@ export default function App() {
     setNestedParts([])
   }
 
+  // When a material preset is selected, update all tool profiles to match
+  const handleMaterialSelect = (material) => {
+    setToolProfiles(prev => prev.map(p => ({
+      ...p,
+      totalDepth: material.thickness,
+      ...(material.feedRate   ? { feedRate:   material.feedRate   } : {}),
+      ...(material.plungeRate ? { plungeRate: material.plungeRate } : {}),
+      ...(material.depthPerPass ? { depthPerPass: material.depthPerPass } : {}),
+    })))
+  }
+
   const handlePartMove = (placedIdx, dx, dy) => {
     setNestedParts(prev => prev.map((p, i) => {
       if (i !== placedIdx || !p.placed) return p
       const moved = p.polygon.map(pt => ({ x: pt.x + dx, y: pt.y + dy }))
-      return { ...p, polygon: moved }
+      const movedBridges = (p.bridges || []).map(b => ({ ...b, x: b.x + dx, y: b.y + dy }))
+      return { ...p, polygon: moved, bridges: movedBridges }
     }))
   }
 
   const handlePartRotate = (placedIdx, angleDeg) => {
     setNestedParts(prev => prev.map((p, i) => {
       if (i !== placedIdx || !p.placed) return p
-      // Get current bounding box min to restore position after rotation
       const b = getPolygonBounds(p.polygon)
       const rotated = rotatePolygon(p.polygon, angleDeg)
-      // Restore to original top-left position
       const shifted = rotated.map(pt => ({ x: pt.x + b.minX, y: pt.y + b.minY }))
-      return { ...p, polygon: shifted }
+      // Recompute bridge positions on the new polygon
+      const profile = toolProfiles.find(t => t.id === p.toolProfileId) || toolProfiles[0]
+      const bridges = profile?.bridgesEnabled
+        ? computeBridgePositions(shifted, profile.bridgeCount, profile.bridgeWidth)
+        : []
+      return { ...p, polygon: shifted, bridges }
     }))
   }
 
@@ -182,7 +202,7 @@ export default function App() {
       <div className="layout">
         <aside className="sidebar">
           <DropZone onFileParsed={handleDxfParsed} />
-          <SheetConfig config={sheetConfig} onChange={setSheetConfig} />
+          <SheetConfig config={sheetConfig} onChange={setSheetConfig} onMaterialSelect={handleMaterialSelect} />
           <PartsList
             parts={parts}
             toolProfiles={toolProfiles}

@@ -11,15 +11,26 @@ function n(code) {
 
 export function generateGCode(placedParts, toolProfiles, sheetConfig, options = {}) {
   _lineNum = 10
-  const units = sheetConfig.units || 'mm'
   const lines = []
   const h = (s) => lines.push(s)
+
+  // Safety plane: sheetConfig.safeZ overrides per-profile safeZ
+  const globalSafeZ = sheetConfig.safeZ ?? 33
+
+  // Datum offset — applied to every XY coordinate
+  const ox = sheetConfig.datumX ?? 0
+  const oy = sheetConfig.datumY ?? 0
+  const X = (v) => fmt(v + ox)
+  const Y = (v) => fmt(v + oy)
 
   // Header — matches EnRoute post format
   h(`(EnRoute Software)`)
   h(`(www.enroutesoftware.com)`)
   h(`(Multicam Australia A2MC Post 11/03/2014)`)
-  h(`(Plate Size: X${fmt(sheetConfig.width)} Y${fmt(sheetConfig.height)} Z3.0000)`)
+  h(`(Material: ${sheetConfig.material || 'Custom'} ${sheetConfig.thickness ?? '?'}mm)`)
+  h(`(Plate Size: X${fmt(sheetConfig.width)} Y${fmt(sheetConfig.height)} Z${fmt(sheetConfig.thickness ?? 0)})`)
+  h(`(Safety Plane: Z${fmt(globalSafeZ)})`)
+  if (ox !== 0 || oy !== 0) h(`(Datum Offset: X${fmt(ox)} Y${fmt(oy)})`)
   h(`(Parts placed: ${placedParts.filter(p => p.placed).length})`)
   h(n(`G90 G56`))
 
@@ -34,27 +45,27 @@ export function generateGCode(placedParts, toolProfiles, sheetConfig, options = 
   }
 
   for (const { profile, parts } of Object.values(byTool)) {
+    const safeZ = globalSafeZ  // use sheet-level safety plane
     h(``)
     h(`(--- ${profile.name} ---)`)
     if (profile.bridgesEnabled) {
       h(`(Bridges: ${profile.bridgeCount} x ${profile.bridgeWidth}mm wide, ${profile.bridgeHeight}mm high)`)
     }
 
-    h(n(`M5`))                                               // Spindle off before tool change
-    h(n(`M6 T${profile.toolNumber} (${fmt(profile.diameter)} CUTTER)`))  // Tool change
-    h(n(`G0 X0.0000 Y0.0000`))                              // Move to safe position
-    h(n(`    Z${fmt(profile.safeZ)}`))                       // Raise Z
-    h(n(`M3 S${profile.rpm}`))                               // Spindle on
+    h(n(`M5`))
+    h(n(`M6 T${profile.toolNumber} (${fmt(profile.diameter)} CUTTER)`))
+    h(n(`G0 X0.0000 Y0.0000`))
+    h(n(`    Z${fmt(safeZ)}`))
+    h(n(`M3 S${profile.rpm}`))
 
     const passes = Math.ceil(profile.totalDepth / profile.depthPerPass)
 
     for (const placed of parts) {
-      const segs = placed.arcSegments || null  // arc-aware segments if available
       const poly = placed.polygon
       if (!poly || poly.length < 2) continue
 
       h(``)
-      h(`(Part: ${placed.partIndex}  Rotation: ${placed.rotation}deg)`)
+      h(`(Part: ${placed.name || placed.partIndex}  Depth: ${fmt(profile.totalDepth)}mm)`)
 
       const bridges = profile.bridgesEnabled
         ? computeBridgePositions(poly, profile.bridgeCount, profile.bridgeWidth)
@@ -67,49 +78,44 @@ export function generateGCode(placedParts, toolProfiles, sheetConfig, options = 
 
         h(`(Pass ${pass}/${passes} Z${fmt(cutZ)})`)
 
-        // Rapid to start XY
-        h(n(`G0 X${fmt(poly[0].x)} Y${fmt(poly[0].y)}`))
-        // Rapid Z to safe
-        h(n(`    Z${fmt(profile.safeZ)}`))
-        // Plunge approach to just above material
+        h(n(`G0 X${X(poly[0].x)} Y${Y(poly[0].y)}`))
+        h(n(`    Z${fmt(safeZ)}`))
         h(n(`G1 Z${fmt(profile.plungeZ)} F${profile.plungeRate}`))
-        // Plunge to cut depth
         h(n(`G1 Z${fmt(cutZ)} F${profile.plungeRate}`))
 
         if (bridges.length === 0 || !isFinalPass) {
-          emitProfile(poly, profile.feedRate, h)
+          emitProfile(poly, profile.feedRate, h, X, Y)
         } else {
-          emitProfileWithBridges(poly, bridges, profile, h)
+          emitProfileWithBridges(poly, bridges, profile, h, X, Y)
         }
 
-        // Retract
-        h(n(`G0 G40 Z${fmt(profile.safeZ)} F2`))
+        h(n(`G0 G40 Z${fmt(safeZ)} F2`))
       }
     }
 
     h(``)
     h(n(`M5`))
     h(n(`G0 X0.0000 Y0.0000`))
-    h(n(`    Z${fmt(profile.safeZ)}`))
+    h(n(`    Z${fmt(safeZ)}`))
   }
 
   h(``)
   h(n(`M5`))
   h(n(`G0 X0.0000 Y0.0000`))
-  h(n(`    Z${fmt(toolProfiles[0]?.safeZ ?? 33)}`))
+  h(n(`    Z${fmt(globalSafeZ)}`))
   h(n(`M30`))
 
   return lines.join('\n')
 }
 
-function emitProfile(poly, feedRate, h) {
+function emitProfile(poly, feedRate, h, X, Y) {
   for (let i = 1; i < poly.length; i++) {
-    h(n(`G1 X${fmt(poly[i].x)} Y${fmt(poly[i].y)} F${feedRate}`))
+    h(n(`G1 X${X(poly[i].x)} Y${Y(poly[i].y)} F${feedRate}`))
   }
-  h(n(`G1 X${fmt(poly[0].x)} Y${fmt(poly[0].y)} F${feedRate}`))
+  h(n(`G1 X${X(poly[0].x)} Y${Y(poly[0].y)} F${feedRate}`))
 }
 
-function emitProfileWithBridges(poly, bridges, profile, h) {
+function emitProfileWithBridges(poly, bridges, profile, h, X, Y) {
   const feedRate = profile.feedRate
   const bridgeZ = -(profile.totalDepth - profile.bridgeHeight)
   const segmented = segmentWithBridges(poly, bridges, profile.bridgeWidth)
@@ -117,10 +123,10 @@ function emitProfileWithBridges(poly, bridges, profile, h) {
   for (const seg of segmented) {
     if (seg.isBridge) {
       h(n(`G1 Z${fmt(bridgeZ)} F${profile.plungeRate}`))
-      h(n(`G1 X${fmt(seg.end.x)} Y${fmt(seg.end.y)} F${feedRate}`))
+      h(n(`G1 X${X(seg.end.x)} Y${Y(seg.end.y)} F${feedRate}`))
       h(n(`G1 Z${fmt(-profile.totalDepth)} F${profile.plungeRate}`))
     } else {
-      h(n(`G1 X${fmt(seg.end.x)} Y${fmt(seg.end.y)} F${feedRate}`))
+      h(n(`G1 X${X(seg.end.x)} Y${Y(seg.end.y)} F${feedRate}`))
     }
   }
 }
