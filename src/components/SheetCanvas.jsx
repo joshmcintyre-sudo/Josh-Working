@@ -174,7 +174,8 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
     else rapidPts.push(a.x, a.y, b.x, b.y)
   }
 
-  const zoomPct = Math.round((stageRef.current ? stageRef.current.scaleX() : baseScale) * 100)
+  const zoomPct = Math.round(zoom * 100)
+  const sw = 1 / zoom   // stroke width in world units — thins as you zoom in
 
   return (
     <div className="canvas-wrap">
@@ -264,18 +265,18 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
 
             {/* Sheet */}
             <Rect x={0} y={0} width={sheetConfig.width} height={sheetConfig.height}
-              fill="#1e1e35" stroke="#4a4a6e" strokeWidth={1 / baseScale} />
+              fill="#1e1e35" stroke="#4a4a6e" strokeWidth={sw} />
 
             {/* Grid */}
             {Array.from({ length: Math.floor(sheetConfig.width / gridStep) }).map((_, i) => (
               <Line key={`gx${i}`}
                 points={[(i+1)*gridStep, 0, (i+1)*gridStep, sheetConfig.height]}
-                stroke="#252540" strokeWidth={0.5 / baseScale} />
+                stroke="#252540" strokeWidth={sw * 0.5} />
             ))}
             {Array.from({ length: Math.floor(sheetConfig.height / gridStep) }).map((_, i) => (
               <Line key={`gy${i}`}
                 points={[0, (i+1)*gridStep, sheetConfig.width, (i+1)*gridStep]}
-                stroke="#252540" strokeWidth={0.5 / baseScale} />
+                stroke="#252540" strokeWidth={sw * 0.5} />
             ))}
 
             {/* Margin */}
@@ -283,7 +284,7 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
               <Rect x={sheetConfig.margin} y={sheetConfig.margin}
                 width={sheetConfig.width - sheetConfig.margin*2}
                 height={sheetConfig.height - sheetConfig.margin*2}
-                fill="transparent" stroke="#333360" strokeWidth={0.5/baseScale} dash={[4/baseScale, 4/baseScale]} />
+                fill="transparent" stroke="#333360" strokeWidth={sw * 0.5} dash={[4*sw, 4*sw]} />
             )}
 
             {/* Placed parts */}
@@ -300,13 +301,11 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
                     points={pts}
                     fill={isSelected ? color + '55' : color + '22'}
                     stroke={isSelected ? '#ffffff' : color}
-                    strokeWidth={(isSelected ? 2 : 1.5) / baseScale}
+                    strokeWidth={isSelected ? sw * 2 : sw * 1.5}
                     closed
                     draggable
                     onClick={(e) => { e.cancelBubble = true; setSelectedIdx(i) }}
                     onDragEnd={(e) => {
-                      const s = stageRef.current?.scaleX() || baseScale
-                      // Shape is inside scaleY=-1 group, so dy is already world-correct
                       onPartMove && onPartMove(i, e.target.x(), e.target.y())
                       e.target.position({ x: 0, y: 0 })
                     }}
@@ -314,9 +313,9 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
                   {/* Bridge markers */}
                   {placed.bridges?.map((b, bi) => (
                     <Rect key={bi}
-                      x={b.x - 3/baseScale} y={b.y - 3/baseScale}
-                      width={6/baseScale} height={6/baseScale}
-                      fill="#fbbf24" stroke="#f59e0b" strokeWidth={0.5/baseScale} />
+                      x={b.x - 3*sw} y={b.y - 3*sw}
+                      width={6*sw} height={6*sw}
+                      fill="#fbbf24" stroke="#f59e0b" strokeWidth={sw * 0.5} />
                   ))}
                 </Group>
               )
@@ -324,19 +323,19 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
 
             {/* Simulation: rapid moves */}
             {simState !== 'idle' && rapidPts.length >= 4 && (
-              <Line points={rapidPts} stroke="#4444aa" strokeWidth={0.8/baseScale} />
+              <Line points={rapidPts} stroke="#4444aa" strokeWidth={sw * 0.8} />
             )}
             {/* Simulation: cut moves */}
             {simState !== 'idle' && cutPts.length >= 4 && (
-              <Line points={cutPts} stroke="#00ffcc" strokeWidth={1.2/baseScale} opacity={0.8} />
+              <Line points={cutPts} stroke="#00ffcc" strokeWidth={sw * 1.2} opacity={0.8} />
             )}
             {/* Simulation: tool head */}
             {simState !== 'idle' && (
               <Group>
                 <Circle x={toolPos.x} y={toolPos.y}
-                  radius={4/baseScale} fill="#ffffff" opacity={0.9} />
+                  radius={4*sw} fill="#ffffff" opacity={0.9} />
                 <Circle x={toolPos.x} y={toolPos.y}
-                  radius={8/baseScale} stroke="#ffffff" strokeWidth={0.5/baseScale} opacity={0.4} />
+                  radius={8*sw} stroke="#ffffff" strokeWidth={sw * 0.5} opacity={0.4} />
               </Group>
             )}
 
@@ -344,9 +343,9 @@ export default function SheetCanvas({ sheetConfig, nestedParts, toolProfiles, on
 
           {/* Datum label — not Y-flipped */}
           <Text
-            x={4 / baseScale}
-            y={sheetConfig.height + 6 / baseScale}
-            text="X0 Y0" fontSize={10 / baseScale} fill="#555"
+            x={4 * sw}
+            y={sheetConfig.height + 6 * sw}
+            text="X0 Y0" fontSize={10 * sw} fill="#555"
           />
         </Layer>
       </Stage>
