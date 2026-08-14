@@ -104,12 +104,24 @@ describe('inserting a splice into a run', () => {
     expect(analyseLoom(loom).errorCount).toBe(before.errorCount)
   })
 
-  it('flags it when the two halves come out at different gauges', () => {
-    // A shorter half can legitimately take a smaller gauge. That must not reach
-    // the bench unannounced, so the mixed-gauge check catches it.
+  it('keeps both halves on one gauge', () => {
+    // Sized independently the shorter half would take a smaller gauge, which
+    // would put two reels on the bench for one circuit. The circuit-match pass
+    // lifts it back, so splicing never silently changes what gets cut.
     const free = structuredClone(DEMO_LOOM)
     for (const e of free.edges) if (e.circuitId === 'C-204') e.gaugeOverrideId = undefined
-    const { loom } = insertSpliceInRun(free, 'e-fb-locking', 300)
+    const { loom, edgeIds } = insertSpliceInRun(free, 'e-fb-locking', 300)
+    const a = analyseLoom(loom)
+    const sizes = edgeIds.map((id) => a.byEdgeId[id]!.sizing.size!.id)
+    expect(new Set(sizes).size).toBe(1)
+    expect(a.issues.some((i) => i.code === 'mixed_gauge_circuit')).toBe(false)
+  })
+
+  it('still flags a circuit left mixed by a manual override', () => {
+    const mixed = structuredClone(DEMO_LOOM)
+    const { loom, edgeIds } = insertSpliceInRun(mixed, 'e-fb-locking', 300)
+    // Force one half smaller by hand; the check must not stay quiet about it.
+    loom.edges.find((e) => e.id === edgeIds[1])!.gaugeOverrideId = 'awg-20'
     expect(analyseLoom(loom).issues.some((i) => i.code === 'mixed_gauge_circuit')).toBe(true)
   })
 

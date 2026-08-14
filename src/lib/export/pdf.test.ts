@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { analyseLoom } from '~/lib/loom/analysis'
 import { DEMO_LOOM } from '~/lib/loom/demo-loom'
-import { buildManufacturingDrawing, hexToRgb } from './pdf'
+import { buildManufacturingDrawing, hexToRgb, pdfSafe } from './pdf'
 import { baseFilename } from './download'
 
 const analysis = analyseLoom(DEMO_LOOM)
@@ -28,6 +28,13 @@ describe('manufacturing drawing', () => {
     for (let page = 1; page <= total; page++) {
       expect(out).toContain(`Sheet ${page} of ${total}`)
     }
+  })
+
+  it('lists a pin-out for every connector', () => {
+    const out = textOf(doc)
+    expect(out).toContain('Connector pin-outs')
+    expect(out).toContain('Roof light bar connector')
+    expect(out).toContain('Deutsch DT, 2-way')
   })
 
   it('schedules what goes inside each bundle', () => {
@@ -107,5 +114,31 @@ describe('hexToRgb', () => {
   })
   it('falls back to grey rather than producing NaN channels', () => {
     expect(hexToRgb('not-a-colour')).toEqual([80, 80, 80])
+  })
+})
+
+describe('WinAnsi safety', () => {
+  it('transliterates engineering glyphs the standard fonts cannot render', () => {
+    expect(pdfSafe('a → b')).toBe('a -> b')
+    expect(pdfSafe('⌀ 12 mm')).toBe('OD 12 mm')
+    expect(pdfSafe('≤ 3 %')).toBe('<= 3 %')
+    expect(pdfSafe('1 × 4')).toBe('1 x 4')
+  })
+
+  it('keeps the Latin-1 characters a drawing actually needs', () => {
+    // Latin-1 plus the WinAnsi 0x80-0x9F block: em dash, smart quotes, bullet.
+    expect(pdfSafe('2.5 mm² · 30 °C — “fine” • ok')).toBe('2.5 mm² · 30 °C — “fine” • ok')
+  })
+
+  it('drops anything it cannot render rather than emitting noise', () => {
+    expect(pdfSafe('roof 🚚 lamp')).toBe('roof  lamp')
+  })
+
+  it('survives a node name full of characters the font does not have', () => {
+    const loom = structuredClone(DEMO_LOOM)
+    loom.nodes.find((n) => n.id === 'lightbar')!.name = 'Roof → 🚚 ⌀ lamp'
+    const doc = buildManufacturingDrawing(analyseLoom(loom), { date: FIXED_DATE })
+    expect(doc.getNumberOfPages()).toBeGreaterThan(0)
+    expect(doc.output()).toContain('Roof ->')
   })
 })

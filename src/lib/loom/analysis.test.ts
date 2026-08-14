@@ -287,27 +287,56 @@ describe('the demo loom', () => {
     expect(inv.fuse?.selected?.boltDown).toBe(true)
   })
 
-  it('carries the light bar feed above what that run alone would need', () => {
-    // The override exists because of the cumulative drop down the chain, not
-    // because of this run. Removing it must bring the failure back — otherwise
-    // the override is cargo and should go.
-    const withoutOverride = structuredClone(DEMO_LOOM)
-    const feed = withoutOverride.edges.find((e) => e.id === 'e-fb-lightbar')!
-    expect(feed.gaugeOverrideId).toBe('awg-12')
-    feed.gaugeOverrideId = undefined
-    const bare = analyseLoom(withoutOverride)
-    expect(bare.issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(true)
-    // ...and the run on its own was inside its budget all along.
-    expect(bare.byEdgeId['e-fb-lightbar']!.sizing.voltageDropPct).toBeLessThanOrEqual(
-      bare.byEdgeId['e-fb-lightbar']!.sizing.dropLimitPct,
-    )
+  it('shares the drop budget so the whole chain fits, not just each run', () => {
+    // The light bar sits at the end of four runs in series. Sized run by run
+    // the chain totals over 3 %; the allocation pass upsizes until it fits.
+    const withAllocation = analyseLoom(DEMO_LOOM)
+    expect(withAllocation.issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(false)
+
+    const without = analyseLoom({
+      ...DEMO_LOOM,
+      settings: { ...DEMO_LOOM.settings, allocateDropBudget: false },
+    })
+    expect(without.issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(true)
   })
 
-  it('upsizes the cab feed so a MIDI fuse fits under its rating', () => {
+  it('upsizes as little as it can get away with', () => {
+    const withAllocation = analyseLoom(DEMO_LOOM)
+    const without = analyseLoom({
+      ...DEMO_LOOM,
+      settings: { ...DEMO_LOOM.settings, allocateDropBudget: false },
+    })
+    const changed = withAllocation.edges.filter(
+      (e) =>
+        e.sizing.size!.area_mm2 > without.byEdgeId[e.edge.id]!.sizing.size!.area_mm2,
+    )
+    // Something had to give, but not everything on the path. The count
+    // includes runs lifted afterwards to keep a circuit on one gauge.
+    expect(changed.length).toBeGreaterThan(0)
+    expect(changed.length).toBeLessThanOrEqual(4)
+    // And nothing was made smaller to buy it.
+    for (const e of withAllocation.edges) {
+      expect(e.sizing.size!.area_mm2).toBeGreaterThanOrEqual(
+        without.byEdgeId[e.edge.id]!.sizing.size!.area_mm2,
+      )
+    }
+  })
+
+  it('leaves a manually sized run alone', () => {
+    // The inverter ground is set by hand to match its feed. Allocation must not
+    // quietly override a decision someone made.
+    const a = analyseLoom(DEMO_LOOM)
+    expect(a.byEdgeId['e-inv-gnd']!.sizing.size?.id).toBe('awg-3-0')
+    expect(a.byEdgeId['e-inv-gnd']!.sizing.limitingConstraint).toBe('override')
+  })
+
+  it('keeps the cab feed fusible after the drop allocation lifts it', () => {
+    // Allocation upsized this run past what fusibility alone demanded, so the
+    // binding constraint moves — but the fuse must still fit under the wire.
     const fb = a.byEdgeId['e-bus-fb']!
-    expect(fb.sizing.limitingConstraint).toBe('fusibility')
     expect(fb.fuse?.selected?.familyId).toBe('midi')
     expect(fb.fuse!.selected!.rating_a).toBeLessThanOrEqual(fb.sizing.deratedAmpacity_a)
+    expect(fb.fuse!.selected!.rating_a).toBeGreaterThanOrEqual(fb.current_a * 1.25)
   })
 
   it('builds each circuit from a single gauge', () => {

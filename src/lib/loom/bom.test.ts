@@ -33,11 +33,14 @@ describe('bill of materials', () => {
     expect(dt.some((l) => l.partNumber === '0460-202-16141')).toBe(true)
   })
 
-  it('counts one contact pair per terminated way', () => {
+  it('counts one contact pair per occupied cavity, not per wire', () => {
     const connectors = bom.groups.find((g) => g.title === 'Connectors')!
-    // The light bar connector is passed through by two runs: feed in, feed out.
+    // Four runs land on the light bar connector — feed in and out, return in
+    // and out — but they occupy two cavities, so two pins and two sockets.
     const pins = connectors.lines.find((l) => l.key === 'dt2_lightbar-pin')!
+    const sockets = connectors.lines.find((l) => l.key === 'dt2_lightbar-socket')!
     expect(pins.quantity).toBe(2)
+    expect(sockets.quantity).toBe(2)
   })
 
   it('lists a cavity seal for every unused way', () => {

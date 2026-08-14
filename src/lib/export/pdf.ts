@@ -19,6 +19,56 @@ import { CONNECTOR_META, FUSE_META, WIRE_META } from '~/lib/loom/data'
 import { ACCESSORY_META } from '~/lib/loom/accessories'
 import { buildFormboard, exactFitScale, type FormboardLayout } from '~/lib/loom/formboard'
 
+/**
+ * jsPDF's standard fonts are WinAnsi-encoded, so anything outside Latin-1 comes
+ * out as garbage — and node names, locations and notes are typed by people.
+ * Common engineering glyphs are transliterated and the rest dropped, so a
+ * stray arrow or emoji cannot corrupt a drawing.
+ */
+const GLYPHS: Record<string, string> = {
+  '\u2192': '->',
+  '\u2190': '<-',
+  '\u2300': 'OD',
+  '\u2264': '<=',
+  '\u2265': '>=',
+  '\u00d7': 'x',
+}
+
+/**
+ * WinAnsi is Latin-1 plus a block at 0x80-0x9F holding the typographic
+ * characters a drawing legitimately uses — em dash, smart quotes, bullet.
+ * Those render fine and must not be stripped.
+ */
+const WINANSI_EXTRAS = new Set(
+  '\u20ac\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\u017d' +
+    '\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u017e\u0178',
+)
+
+export function pdfSafe(value: string): string {
+  let out = ''
+  for (const ch of value) {
+    const mapped = GLYPHS[ch]
+    if (mapped !== undefined) out += mapped
+    else if (ch.codePointAt(0)! <= 0xff || WINANSI_EXTRAS.has(ch)) out += ch
+    // Anything else is dropped rather than rendered as noise.
+  }
+  return out
+}
+
+/** Sanitise every string in an autoTable body or head. */
+function safeRows<T>(rows: T[][]): T[][] {
+  return rows.map((row) =>
+    row.map((cell) => {
+      if (typeof cell === 'string') return pdfSafe(cell) as T
+      if (cell && typeof cell === 'object' && 'content' in cell) {
+        const c = cell as { content: unknown }
+        if (typeof c.content === 'string') return { ...cell, content: pdfSafe(c.content) } as T
+      }
+      return cell
+    }),
+  )
+}
+
 /** A3 landscape in millimetres — jsPDF works in mm, which suits us here. */
 const SHEET = { width: 420, height: 297 }
 const MARGIN = 10
@@ -61,6 +111,10 @@ export function buildManufacturingDrawing(
   drawBundlePage(doc, analysis)
 
   doc.addPage()
+  sections.push({ title: 'Connector pin-outs', startPage: doc.getNumberOfPages(), scale: 'n/a' })
+  drawPinoutPage(doc, analysis)
+
+  doc.addPage()
   sections.push({ title: 'Engineering basis', startPage: doc.getNumberOfPages(), scale: 'n/a' })
   drawBasisPage(doc, analysis)
 
@@ -99,23 +153,23 @@ function titleBlock(
     const x = MARGIN + cols[i]! + 3
     doc.setFontSize(6)
     doc.setTextColor(120, 120, 120)
-    doc.text(label.toUpperCase(), x, y + 5)
+    doc.text(pdfSafe(label.toUpperCase()), x, y + 5)
     doc.setFontSize(size)
     doc.setTextColor(20, 20, 20)
-    doc.text(value, x, y + 13)
+    doc.text(pdfSafe(value), x, y + 13)
   }
 
   cell(0, 'Loom', analysis.loom.name, 12)
   doc.setFontSize(7)
   doc.setTextColor(90, 90, 90)
-  doc.text(analysis.loom.description ?? '', MARGIN + 3, y + 20, {
+  doc.text(pdfSafe(analysis.loom.description ?? ''), MARGIN + 3, y + 20, {
     maxWidth: cols[1]! - 6,
   })
 
   cell(1, 'Sheet', sheetTitle)
   doc.setFontSize(7)
   doc.setTextColor(90, 90, 90)
-  doc.text(sheetNumber, MARGIN + cols[1]! + 3, y + 20)
+  doc.text(pdfSafe(sheetNumber), MARGIN + cols[1]! + 3, y + 20)
 
   cell(2, 'Revision', analysis.loom.revision, 12)
   cell(3, 'Scale', scaleNote, 8)
@@ -130,7 +184,7 @@ function titleBlock(
   ]
     .filter(Boolean)
     .join('   ')
-  doc.text(meta, MARGIN + cols[4]! + 3, y + 20)
+  doc.text(pdfSafe(meta), MARGIN + cols[4]! + 3, y + 20)
 }
 
 /* ----------------------------- formboard page ----------------------------- */
@@ -201,9 +255,11 @@ function drawFormboardPage(doc: jsPDF, analysis: LoomAnalysis, layout: Formboard
     doc.setFontSize(5)
     doc.setTextColor(70, 70, 70)
     doc.text(
-      `${trunk.label} · ${trunk.wireCount}w · ${trunk.bundleOd_mm} mm${
-        trunk.sleeving ? ` · ${trunk.sleeving.replace(/ ID.*/, '')}` : ''
-      }`,
+      pdfSafe(
+        `${trunk.label} · ${trunk.wireCount}w · ${trunk.bundleOd_mm} mm${
+          trunk.sleeving ? ` · ${trunk.sleeving.replace(/ ID.*/, '')}` : ''
+        }`,
+      ),
       toX(tMid.x),
       toY(tMid.y) - width / 2 - 1.2,
       { align: 'center', baseline: 'bottom', angle: tAngle },
@@ -248,7 +304,7 @@ function drawFormboardPage(doc: jsPDF, analysis: LoomAnalysis, layout: Formboard
 
     doc.setFontSize(5.2)
     doc.setTextColor(40, 40, 40)
-    doc.text(`${run.circuitId}  ${run.size}`, cx + nx * 2.1, cy + ny * 2.1, {
+    doc.text(pdfSafe(`${run.circuitId}  ${run.size}`), cx + nx * 2.1, cy + ny * 2.1, {
       align: 'center',
       baseline: 'middle',
       angle,
@@ -277,11 +333,11 @@ function drawFormboardPage(doc: jsPDF, analysis: LoomAnalysis, layout: Formboard
     }
     doc.setFontSize(6)
     doc.setTextColor(20, 20, 20)
-    doc.text(node.name, x + 4.5, y - 0.4, { maxWidth: 46 })
+    doc.text(pdfSafe(node.name), x + 4.5, y - 0.4, { maxWidth: 46 })
     if (node.location) {
       doc.setFontSize(5)
       doc.setTextColor(130, 130, 130)
-      doc.text(node.location, x + 4.5, y + 2.8, { maxWidth: 46 })
+      doc.text(pdfSafe(node.location), x + 4.5, y + 2.8, { maxWidth: 46 })
     }
   }
 
@@ -355,29 +411,32 @@ function drawCutListPage(doc: jsPDF, analysis: LoomAnalysis) {
     startY: MARGIN + 6,
     margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + TITLE_BLOCK_H + 6 },
     head: [
-      ['Wire ref', 'From', 'To', 'Cut (mm)', 'Wire', 'Insulation', 'Amps', 'Drop %', 'Driven by', 'Fuse'],
+      ['Wire ref', 'From', 'Cav', 'To', 'Cav', 'Cut (mm)', 'Wire', 'Amps', 'Drop %', 'Driven by', 'Fuse'],
     ],
-    body: rows.map((r) => [
+    body: safeRows(rows.map((r) => [
       r.wireRef,
       `${r.from}\n${r.fromLocation}`,
+      r.fromCavity,
       `${r.to}\n${r.toLocation}`,
+      r.toCavity,
       String(r.length_mm),
       r.size,
-      r.insulation,
       r.current_a.toFixed(1),
       r.voltageDropPct.toFixed(2),
       r.limitingConstraint.replace(/_/g, ' '),
       r.fuse,
-    ]),
+    ])),
     styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: 210, lineWidth: 0.1 },
     headStyles: { fillColor: [40, 40, 40], fontSize: 6.5 },
     columnStyles: {
       0: { cellWidth: 20, fontStyle: 'bold' },
-      3: { cellWidth: 18, halign: 'right' },
-      4: { cellWidth: 24 },
-      6: { cellWidth: 16, halign: 'right' },
+      2: { cellWidth: 10, halign: 'center' },
+      4: { cellWidth: 10, halign: 'center' },
+      5: { cellWidth: 18, halign: 'right' },
+      6: { cellWidth: 24 },
       7: { cellWidth: 16, halign: 'right' },
-      8: { cellWidth: 28 },
+      8: { cellWidth: 16, halign: 'right' },
+      9: { cellWidth: 28 },
     },
   })
 }
@@ -410,7 +469,7 @@ function drawBomPage(doc: jsPDF, analysis: LoomAnalysis) {
     startY: MARGIN + 6,
     margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + TITLE_BLOCK_H + 6 },
     head: [['Item', 'Part number', 'Qty', 'Unit', 'Note']],
-    body,
+    body: safeRows(body),
     styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: 210, lineWidth: 0.1 },
     headStyles: { fillColor: [40, 40, 40], fontSize: 6.5 },
     columnStyles: {
@@ -459,7 +518,7 @@ function drawBundlePage(doc: jsPDF, analysis: LoomAnalysis) {
     startY: MARGIN + 6,
     margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + TITLE_BLOCK_H + 6 },
     head: [['Bundle', 'Length (mm)', 'Wires', 'Bundle OD', 'Sleeving', 'Ties', 'Contents']],
-    body: analysis.segments.map((load) => [
+    body: safeRows(analysis.segments.map((load) => [
       load.segment.label ?? load.segment.id,
       String(load.segment.length_mm),
       String(load.edgeIds.length),
@@ -476,7 +535,7 @@ function drawBundlePage(doc: jsPDF, analysis: LoomAnalysis) {
           return e ? `${e.edge.circuitId} ${e.sizing.size?.label ?? ''}`.trim() : id
         })
         .join(', '),
-    ]),
+    ])),
     styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: 210, lineWidth: 0.1, valign: 'top' },
     headStyles: { fillColor: [40, 40, 40], fontSize: 6.5 },
     columnStyles: {
@@ -501,6 +560,78 @@ function drawBundlePage(doc: jsPDF, analysis: LoomAnalysis) {
   )
 }
 
+/* -------------------------------- pin-outs -------------------------------- */
+
+/**
+ * A table per connector: cavity, wire, gauge, current, where it goes.
+ *
+ * This is the sheet that turns a correct design into something a person can
+ * build. Everything else says what to make; this says where it goes.
+ */
+function drawPinoutPage(doc: jsPDF, analysis: LoomAnalysis) {
+  if (analysis.pinouts.length === 0) {
+    doc.setFontSize(9)
+    doc.setTextColor(120, 120, 120)
+    doc.text('No connectors on this loom.', MARGIN, MARGIN + 10)
+    return
+  }
+
+  const body: (string | { content: string; colSpan?: number; styles?: object })[][] = []
+  for (const pinout of analysis.pinouts) {
+    body.push([
+      {
+        content:
+          `${pinout.node.name}  —  ${pinout.series?.label ?? 'unknown series'}, ` +
+          `${pinout.ways}-way${pinout.variant ? `, key ${pinout.variant}` : ''}` +
+          `${pinout.node.location ? `  ·  ${pinout.node.location}` : ''}` +
+          `  ·  ${pinout.contactRating_a.toFixed(1)} A per contact`,
+        colSpan: 7,
+        styles: { fillColor: [235, 235, 235], fontStyle: 'bold', fontSize: 6.5 },
+      },
+    ])
+    for (const pin of pinout.pins) {
+      body.push([
+        String(pin.cavity),
+        pin.circuitId ? pin.wireRefs.join(' / ') : '—',
+        pin.size,
+        pin.circuitId ? `${pin.current_a.toFixed(1)} A` : '',
+        pin.direction ?? '',
+        pin.circuitId ? pin.destination : 'EMPTY — fit sealing plug',
+        pin.circuitId ? (pin.explicit ? '' : 'auto') : '',
+      ])
+    }
+  }
+
+  autoTable(doc, {
+    startY: MARGIN + 6,
+    margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + TITLE_BLOCK_H + 6 },
+    head: [['Cav', 'Wire', 'Size', 'Current', 'Dir', 'Goes to', '']],
+    body: safeRows(body),
+    styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: 210, lineWidth: 0.1 },
+    headStyles: { fillColor: [40, 40, 40], fontSize: 6.5 },
+    columnStyles: {
+      0: { cellWidth: 14, halign: 'right', fontStyle: 'bold' },
+      1: { cellWidth: 26 },
+      2: { cellWidth: 24 },
+      3: { cellWidth: 20, halign: 'right' },
+      4: { cellWidth: 14 },
+      6: { cellWidth: 16 },
+    },
+  })
+
+  const y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 5
+  doc.setFontSize(6.5)
+  doc.setTextColor(110, 110, 110)
+  doc.text(
+    'Cavities marked "auto" were filled in by the tool in a stable order rather than chosen by ' +
+      'the designer. Confirm them before crimping. Every empty cavity needs a sealing plug or the ' +
+      'connector loses its IP rating.',
+    MARGIN,
+    y,
+    { maxWidth: SHEET.width - MARGIN * 2 },
+  )
+}
+
 /* --------------------------------- basis ---------------------------------- */
 
 function drawBasisPage(doc: jsPDF, analysis: LoomAnalysis) {
@@ -514,7 +645,7 @@ function drawBasisPage(doc: jsPDF, analysis: LoomAnalysis) {
     startY: MARGIN + 6,
     margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + TITLE_BLOCK_H + 6 },
     head: [['Engineering basis', '']],
-    body: [
+    body: safeRows([
       ['System voltage', `${s.systemVoltage_v} V DC`],
       ['Ampacity basis', basisLabel],
       ['Conductor family', s.defaultFamily === 'awg' ? 'AWG / B&S' : 'Metric mm²'],
@@ -543,7 +674,7 @@ function drawBasisPage(doc: jsPDF, analysis: LoomAnalysis) {
           `fuses ${FUSE_META.revision}; accessories ${ACCESSORY_META.revision}`,
       ],
       ['Part number policy', CONNECTOR_META.pnPolicy.note],
-    ],
+    ]),
     styles: { fontSize: 7, cellPadding: 1.6, lineColor: 210, lineWidth: 0.1, valign: 'top' },
     headStyles: { fillColor: [40, 40, 40], fontSize: 7 },
     columnStyles: { 0: { cellWidth: 60, fontStyle: 'bold' }, 1: { cellWidth: 'auto' } },
@@ -555,7 +686,12 @@ function drawBasisPage(doc: jsPDF, analysis: LoomAnalysis) {
       startY: (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6,
       margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + TITLE_BLOCK_H + 6 },
       head: [['', 'Outstanding checks']],
-      body: issues.map((i) => [i.severity.toUpperCase(), `${i.message}${i.remedy ? ` — ${i.remedy}` : ''}`]),
+      body: safeRows(
+        issues.map((i) => [
+          i.severity.toUpperCase(),
+          `${i.message}${i.remedy ? ` - ${i.remedy}` : ''}`,
+        ]),
+      ),
       styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: 210, lineWidth: 0.1 },
       headStyles: { fillColor: [40, 40, 40], fontSize: 6.5 },
       columnStyles: { 0: { cellWidth: 20, fontStyle: 'bold' } },

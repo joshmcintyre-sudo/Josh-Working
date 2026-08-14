@@ -33,6 +33,7 @@ export type LimitingConstraint =
   | 'both'
   | 'fusibility'
   | 'minimum_size'
+  | 'circuit_match'
   | 'override'
 
 /**
@@ -360,6 +361,8 @@ function buildRationale(
       return `${size.label} — both constraints bind at this size (${amps}, ${drop}).`
     case 'fusibility':
       return `${size.label} — upsized so a fuse fits: it must be at or above 1.25 x ${input.current_a} A and at or below the conductor's ${ampacity_a.toFixed(1)} A. Ampacity and drop alone would allow smaller.`
+    case 'circuit_match':
+      return `${size.label} — matched to the largest run in its circuit.`
     case 'minimum_size':
       return `${size.label} — raised to the shop minimum size; the calculation alone would allow smaller (${amps}, ${drop}).`
     case 'override':

@@ -6,7 +6,7 @@
  */
 
 import type { LoomAnalysis } from '~/lib/loom/analysis'
-import { bomCsv, cutListCsv } from '~/lib/loom/bom'
+import { bomCsv, cutListCsv, pinoutCsv } from '~/lib/loom/bom'
 import { buildManufacturingDrawing, type DrawingOptions } from './pdf'
 
 function slug(value: string): string {
@@ -43,6 +43,13 @@ export function downloadCutList(analysis: LoomAnalysis): void {
   downloadBlob(
     new Blob([cutListCsv(analysis)], { type: 'text/csv;charset=utf-8' }),
     `${baseFilename(analysis)}-cut-list.csv`,
+  )
+}
+
+export function downloadPinouts(analysis: LoomAnalysis): void {
+  downloadBlob(
+    new Blob([pinoutCsv(analysis)], { type: 'text/csv;charset=utf-8' }),
+    `${baseFilename(analysis)}-pinouts.csv`,
   )
 }
 

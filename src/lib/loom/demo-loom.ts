@@ -113,7 +113,7 @@ export const DEMO_LOOM: Loom = {
       location: 'Cab roof, LH A-pillar exit',
       position: { x: 720, y: 180 },
       formboardPosition: { x: 1780, y: 300 },
-      connector: { seriesId: 'deutsch-dt', ways: 2, cavities: { '1': 'C-201 feed', '2': 'C-201 return' } },
+      connector: { seriesId: 'deutsch-dt', ways: 2, cavities: { '1': 'C-201', '2': 'C-201G' } },
     },
     {
       id: 'dtm2_strobe',
@@ -122,7 +122,7 @@ export const DEMO_LOOM: Loom = {
       location: 'Cab roof, centre rear',
       position: { x: 720, y: 260 },
       formboardPosition: { x: 1780, y: 440 },
-      connector: { seriesId: 'deutsch-dtm', ways: 2, cavities: { '1': 'C-202 feed', '2': 'C-202 return' } },
+      connector: { seriesId: 'deutsch-dtm', ways: 2, cavities: { '1': 'C-202', '2': 'C-202G' } },
     },
     {
       id: 'lightbar',
@@ -323,10 +323,6 @@ export const DEMO_LOOM: Loom = {
       lengthFromRouting: true,
       protection: { familyId: 'ato' },
       bundleCount: 4,
-      // Upsized from the 14 AWG this run alone would take. The light bar sits
-      // at the end of four runs in series and the cumulative drop check fails
-      // at 14 AWG — each run passes on its own, the chain does not.
-      gaugeOverrideId: 'awg-12',
     },
     {
       id: 'e-dt-lightbar',
@@ -337,8 +333,6 @@ export const DEMO_LOOM: Loom = {
       class: 'power',
       returnPath: 'modeled',
       lengthFromRouting: true,
-      // Same gauge as the feed so C-201 is one reel on the cut list.
-      gaugeOverrideId: 'awg-12',
     },
     {
       id: 'e-fb-strobe',
@@ -388,30 +382,48 @@ export const DEMO_LOOM: Loom = {
       lengthFromRouting: true,
       protection: { familyId: 'ato' },
       bundleCount: 4,
-      // Upsized from 18 AWG for the same reason as C-201: the cumulative drop
-      // from the battery through the busbar and the cab block exceeds 3 %.
-      gaugeOverrideId: 'awg-16',
     },
 
     /* ---- returns ---- */
     {
       id: 'e-lightbar-gnd',
       fromNodeId: 'lightbar',
-      toNodeId: 'gnd_cab',
+      toNodeId: 'dt2_lightbar',
       circuitId: 'C-201G',
-      length_mm: 2800,
+      length_mm: 400,
       class: 'ground',
       returnPath: 'modeled',
       lengthFromRouting: true,
       bundleCount: 4,
-      gaugeOverrideId: 'awg-12',
+    },
+    {
+      id: 'e-dtcon-gnd',
+      fromNodeId: 'dt2_lightbar',
+      toNodeId: 'gnd_cab',
+      circuitId: 'C-201G',
+      length_mm: 2600,
+      class: 'ground',
+      returnPath: 'modeled',
+      lengthFromRouting: true,
+      bundleCount: 4,
     },
     {
       id: 'e-strobe-gnd',
       fromNodeId: 'strobe',
+      toNodeId: 'dtm2_strobe',
+      circuitId: 'C-202G',
+      length_mm: 300,
+      class: 'ground',
+      returnPath: 'modeled',
+      lengthFromRouting: true,
+      bundleCount: 4,
+    },
+    {
+      id: 'e-dtmcon-gnd',
+      fromNodeId: 'dtm2_strobe',
       toNodeId: 'gnd_cab',
       circuitId: 'C-202G',
-      length_mm: 2900,
+      length_mm: 2800,
       class: 'ground',
       returnPath: 'modeled',
       lengthFromRouting: true,
@@ -438,7 +450,6 @@ export const DEMO_LOOM: Loom = {
       returnPath: 'modeled',
       lengthFromRouting: true,
       bundleCount: 4,
-      gaugeOverrideId: 'awg-16',
     },
     {
       id: 'e-gndcab-chassis',

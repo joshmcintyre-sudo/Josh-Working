@@ -173,3 +173,36 @@ describe('exact fit scale', () => {
     expect(exactFitScale({ width_mm: 200, height_mm: 100 }, { width_mm: 200, height_mm: 200 }).label).toBe('1:1')
   })
 })
+
+describe('bundle geometry', () => {
+  it('measures the drawn path of a straight bundle against its stated length', () => {
+    const board = buildFormboard(analysis)
+    const roof = board.trunks.find((t) => t.segmentId === 'seg-cab-roof')!
+    expect(roof.drawnLength_mm).toBeGreaterThan(0)
+    expect(typeof roof.lengthMismatch).toBe('boolean')
+  })
+
+  it('flags a bundle bent so far it no longer matches its stated length', () => {
+    const bent = structuredClone(DEMO_LOOM)
+    const seg = bent.segments!.find((s) => s.id === 'seg-cab-rear')!
+    // Drag it a long way off the straight line between its ends.
+    seg.routing = [{ x: 100, y: 100 }]
+    const trunk = buildFormboard(analyseLoom(bent)).trunks.find(
+      (t) => t.segmentId === 'seg-cab-rear',
+    )!
+    expect(trunk.points).toHaveLength(3)
+    expect(trunk.lengthMismatch).toBe(true)
+  })
+
+  it('places tie marks along the bent path, not the straight line', () => {
+    const bent = structuredClone(DEMO_LOOM)
+    const seg = bent.segments!.find((s) => s.id === 'seg-cab-roof')!
+    seg.routing = [{ x: 100, y: 1100 }]
+    const trunk = buildFormboard(analyseLoom(bent)).trunks.find(
+      (t) => t.segmentId === 'seg-cab-roof',
+    )!
+    expect(trunk.tiePoints).toHaveLength(3)
+    // At least one tie should have been pulled toward the bend.
+    expect(trunk.tiePoints.some((t) => t.x < 600)).toBe(true)
+  })
+})

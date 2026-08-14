@@ -58,9 +58,10 @@ describe('routing the demo loom', () => {
   })
 
   it('routes a return all the way back through the trunk', () => {
-    const back = routing.get('e-lightbar-gnd')!
-    expect(back.segmentIds).toEqual(['seg-lb-load', 'seg-roof-lb', 'seg-cab-roof', 'seg-cab-gnd'])
-    expect(back.bundleLength_mm).toBe(400 + 300 + 2100 + 200)
+    // The return leaves the roof connector and threads back down the trunk.
+    const back = routing.get('e-dtcon-gnd')!
+    expect(back.segmentIds).toEqual(['seg-roof-lb', 'seg-cab-roof', 'seg-cab-gnd'])
+    expect(back.bundleLength_mm).toBe(300 + 2100 + 200)
   })
 
   it('leaves nothing unrouted', () => {
@@ -90,9 +91,9 @@ describe('routing the demo loom', () => {
 describe('cut length from routing', () => {
   it('takes the length from the bundle when the run is set to follow it', () => {
     const routing = routeWires(DEMO_LOOM)
-    const edge = DEMO_LOOM.edges.find((e) => e.id === 'e-lightbar-gnd')!
+    const edge = DEMO_LOOM.edges.find((e) => e.id === 'e-dtcon-gnd')!
     expect(edge.lengthFromRouting).toBe(true)
-    expect(cutLengthFor(edge, routing.get(edge.id))).toBe(3000)
+    expect(cutLengthFor(edge, routing.get(edge.id))).toBe(2600)
   })
 
   it('adds the tails to the bundle length', () => {
@@ -117,7 +118,7 @@ describe('cut length from routing', () => {
     const after = analyseLoom(longer)
     // Both roof feeds and both roof returns travel that trunk.
     expect(after.byEdgeId['e-fb-lightbar']!.effectiveLength_mm).toBe(3400)
-    expect(after.byEdgeId['e-lightbar-gnd']!.effectiveLength_mm).toBe(4000)
+    expect(after.byEdgeId['e-dtcon-gnd']!.effectiveLength_mm).toBe(3600)
   })
 })
 
@@ -162,7 +163,7 @@ describe('segment loads on the demo', () => {
   it('counts the wires sharing the roof trunk', () => {
     const roof = analysis.segments.find((s) => s.segment.id === 'seg-cab-roof')!
     expect(roof.edgeIds.sort()).toEqual(
-      ['e-fb-lightbar', 'e-fb-strobe', 'e-lightbar-gnd', 'e-strobe-gnd'].sort(),
+      ['e-fb-lightbar', 'e-fb-strobe', 'e-dtcon-gnd', 'e-dtmcon-gnd'].sort(),
     )
     expect(roof.bundleOd_mm).toBeGreaterThan(0)
   })

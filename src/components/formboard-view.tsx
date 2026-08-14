@@ -24,12 +24,14 @@ export function FormboardView({
   selection,
   onSelect,
   onMoveNode,
+  onRouteSegment,
   onContextMenu,
 }: {
   analysis: LoomAnalysis
   selection: Selection
   onSelect: (s: Selection) => void
   onMoveNode: (id: string, formboardPosition: { x: number; y: number }) => void
+  onRouteSegment?: (id: string, routing: { x: number; y: number }[] | undefined) => void
   onContextMenu?: (selection: Selection, at: { x: number; y: number }) => void
 }) {
   const layout: FormboardLayout = buildFormboard(analysis)
@@ -37,6 +39,8 @@ export function FormboardView({
   const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null)
   const [snap, setSnap] = useState(true)
   const [showWires, setShowWires] = useState(false)
+  /** Dragging a bend point: which segment, and which point in its routing. */
+  const [bend, setBend] = useState<{ segmentId: string; index: number } | null>(null)
 
   const board = layout.board
   const pad = 60
@@ -64,17 +68,29 @@ export function FormboardView({
         preserveAspectRatio="xMidYMid meet"
         className="h-full w-full touch-none"
         onPointerMove={(e) => {
+          const step = snap ? 10 : 1
+          const round = (v: number) => Math.max(0, Math.round(v / step) * step)
+          if (bend) {
+            const p = toBoard(e.clientX, e.clientY)
+            const segment = analysis.loom.segments?.find((s) => s.id === bend.segmentId)
+            if (!segment) return
+            const next = [...(segment.routing ?? [])]
+            next[bend.index] = { x: round(p.x), y: round(p.y) }
+            onRouteSegment?.(bend.segmentId, next)
+            return
+          }
           if (!drag) return
           const p = toBoard(e.clientX, e.clientY)
-          const raw = { x: p.x - drag.dx, y: p.y - drag.dy }
-          const step = snap ? 10 : 1
-          onMoveNode(drag.id, {
-            x: Math.max(0, Math.round(raw.x / step) * step),
-            y: Math.max(0, Math.round(raw.y / step) * step),
-          })
+          onMoveNode(drag.id, { x: round(p.x - drag.dx), y: round(p.y - drag.dy) })
         }}
-        onPointerUp={() => setDrag(null)}
-        onPointerLeave={() => setDrag(null)}
+        onPointerUp={() => {
+          setDrag(null)
+          setBend(null)
+        }}
+        onPointerLeave={() => {
+          setDrag(null)
+          setBend(null)
+        }}
         onClick={(e) => e.target === svgRef.current && onSelect(null)}
       >
         <defs>
@@ -132,6 +148,19 @@ export function FormboardView({
                 e.stopPropagation()
                 onSelect({ kind: 'segment', id: trunk.segmentId })
               }}
+              onDoubleClick={(e) => {
+                if (!onRouteSegment) return
+                e.stopPropagation()
+                const p = toBoard(e.clientX, e.clientY)
+                const segment = analysis.loom.segments?.find((x) => x.id === trunk.segmentId)
+                const existing = segment?.routing ?? []
+                // Insert the new bend into the leg it was dropped on, so the
+                // bundle bends where you clicked rather than at the end.
+                const index = nearestLeg(trunk.points, p)
+                const next = [...existing]
+                next.splice(index, 0, { x: Math.round(p.x), y: Math.round(p.y) })
+                onRouteSegment(trunk.segmentId, next)
+              }}
               onContextMenu={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -156,6 +185,35 @@ export function FormboardView({
                 strokeLinejoin="round"
                 strokeLinecap="round"
               />
+              {selected && onRouteSegment
+                ? trunk.points.slice(1, -1).map((pt, i) => (
+                    <circle
+                      key={`bend-${i}`}
+                      cx={pt.x}
+                      cy={pt.y}
+                      r={16}
+                      fill="#38bdf8"
+                      stroke="#0a0a0a"
+                      strokeWidth={4}
+                      className="cursor-move"
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        ;(e.target as Element).setPointerCapture?.(e.pointerId)
+                        setBend({ segmentId: trunk.segmentId, index: i })
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        const segment = analysis.loom.segments?.find(
+                          (x) => x.id === trunk.segmentId,
+                        )
+                        const next = (segment?.routing ?? []).filter((_, j) => j !== i)
+                        onRouteSegment(trunk.segmentId, next.length ? next : undefined)
+                      }}
+                    >
+                      <title>Drag to bend the bundle · double-click to remove</title>
+                    </circle>
+                  ))
+                : null}
               {trunk.tiePoints.map((t, i) => (
                 <circle key={i} cx={t.x} cy={t.y} r={width / 2 + 4} fill="none" stroke="#facc15" strokeWidth={5} />
               ))}
@@ -164,10 +222,12 @@ export function FormboardView({
                 y={mid.y - width / 2 - 12}
                 fontSize={22}
                 textAnchor="middle"
-                fill="#a1a1aa"
+                fill={trunk.lengthMismatch ? '#fbbf24' : '#a1a1aa'}
                 style={{ paintOrder: 'stroke', stroke: '#0a0a0a', strokeWidth: 6 }}
               >
-                {trunk.label} · {trunk.wireCount}w · ⌀{trunk.bundleOd_mm} mm
+                {trunk.label} · {trunk.wireCount}w · ⌀{trunk.bundleOd_mm} mm ·{' '}
+                {trunk.length_mm} mm
+                {trunk.lengthMismatch ? ` (drawn ${trunk.drawnLength_mm})` : ''}
                 {trunk.sleeving ? ` · ${trunk.sleeving.replace(/ ID.*/, '')}` : ''}
               </text>
             </g>
@@ -304,6 +364,9 @@ export function FormboardView({
           snap 10 mm
         </label>
         {layout.trunks.length ? (
+          <span className="text-neutral-600">double-click a bundle to bend it</span>
+        ) : null}
+        {layout.trunks.length ? (
           <label className="flex cursor-pointer items-center gap-1">
             <input
               type="checkbox"
@@ -335,6 +398,30 @@ export function FormboardView({
       ) : null}
     </div>
   )
+}
+
+/**
+ * Which leg of a polyline a point is nearest, so an inserted bend lands in the
+ * right place rather than always at the end.
+ */
+function nearestLeg(points: { x: number; y: number }[], p: { x: number; y: number }): number {
+  let best = 0
+  let bestDistance = Infinity
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!
+    const b = points[i]!
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const lengthSquared = dx * dx + dy * dy
+    const t =
+      lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
+    const distance = Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = i - 1
+    }
+  }
+  return best
 }
 
 function midpoint(points: { x: number; y: number }[]): { x: number; y: number } {

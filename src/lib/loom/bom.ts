@@ -9,7 +9,7 @@
  * nobody sends a drawing out believing the BOM is orderable when it isn't.
  */
 
-import type { EdgeAnalysis, LoomAnalysis } from './analysis'
+import { wireReferences, type EdgeAnalysis, type LoomAnalysis } from './analysis'
 import {
   connectorSeriesById,
   FUSE_HOLDERS,
@@ -87,7 +87,13 @@ export function buildBom(analysis: LoomAnalysis): Bom {
     if (!node.connector) continue
     const series = connectorSeriesById(node.connector.seriesId)
     if (!series) continue
-    const used = countTerminations(analysis, node)
+    // One pin and one socket per occupied cavity. Counting wires instead would
+    // order two of each for a 2-way inline connector carrying one circuit
+    // through, which is twice what the bench needs.
+    const pinout = analysis.pinouts.find((p) => p.node.id === node.id)
+    const used = pinout
+      ? pinout.pins.filter((p) => p.circuitId !== null).length
+      : countTerminations(analysis, node)
     const housing = series.housings.find((h) => h.ways === node.connector!.ways)
     const spare = Math.max(0, node.connector.ways - used)
 
@@ -359,6 +365,9 @@ export interface CutListRow {
   wireRef: string
   circuitId: string
   edgeId: string
+  /** Cavity at each end, when that end is a connector. */
+  fromCavity: string
+  toCavity: string
   from: string
   fromLocation: string
   to: string
@@ -377,22 +386,22 @@ export interface CutListRow {
 
 export function buildCutList(analysis: LoomAnalysis): CutListRow[] {
   const defaultInsulation = analysis.loom.settings.defaultInsulationId
-  const perCircuit = new Map<string, number>()
-  for (const e of analysis.edges) {
-    perCircuit.set(e.edge.circuitId, (perCircuit.get(e.edge.circuitId) ?? 0) + 1)
+  const refs = wireReferences(analysis.edges)
+  // Which cavity each wire lands in, from the derived pin-outs.
+  const cavityOf = new Map<string, string>()
+  for (const pinout of analysis.pinouts) {
+    for (const pin of pinout.pins) {
+      for (const e of pin.edges) cavityOf.set(`${pinout.node.id}::${e.edge.id}`, String(pin.cavity))
+    }
   }
-  const seen = new Map<string, number>()
   return [...analysis.edges]
     .sort((a, b) => a.edge.circuitId.localeCompare(b.edge.circuitId, undefined, { numeric: true }))
     .map((e: EdgeAnalysis) => {
-      const n = (seen.get(e.edge.circuitId) ?? 0) + 1
-      seen.set(e.edge.circuitId, n)
       return {
-      wireRef:
-        (perCircuit.get(e.edge.circuitId) ?? 1) > 1
-          ? `${e.edge.circuitId}/${n}`
-          : e.edge.circuitId,
+      wireRef: refs.get(e.edge.id) ?? e.edge.circuitId,
       circuitId: e.edge.circuitId,
+      fromCavity: cavityOf.get(`${e.edge.fromNodeId}::${e.edge.id}`) ?? '',
+      toCavity: cavityOf.get(`${e.edge.toNodeId}::${e.edge.id}`) ?? '',
       edgeId: e.edge.id,
       from: e.fromNode.name,
       fromLocation: e.fromNode.location,
@@ -426,6 +435,31 @@ export function toCsv(rows: Record<string, unknown>[], headers?: string[]): stri
 
 export function cutListCsv(analysis: LoomAnalysis): string {
   return toCsv(buildCutList(analysis) as unknown as Record<string, unknown>[])
+}
+
+/** One row per cavity, so a pin-out can go on the bench as a spreadsheet. */
+export function pinoutCsv(analysis: LoomAnalysis): string {
+  const rows = analysis.pinouts.flatMap((pinout) =>
+    pinout.pins.map((pin) => ({
+      connector: pinout.node.name,
+      location: pinout.node.location,
+      series: pinout.series?.label ?? '',
+      ways: pinout.ways,
+      cavity: pin.cavity,
+      circuit: pin.circuitId ?? '',
+      wireRefs: pin.wireRefs.join(' / '),
+      size: pin.size,
+      current_a: pin.circuitId ? pin.current_a.toFixed(2) : '',
+      direction: pin.direction ?? '',
+      destination: pin.destination,
+      assignment: pin.circuitId
+        ? pin.explicit
+          ? 'specified'
+          : 'auto'
+        : 'EMPTY — fit sealing plug',
+    })),
+  )
+  return toCsv(rows)
 }
 
 export function bomCsv(analysis: LoomAnalysis): string {

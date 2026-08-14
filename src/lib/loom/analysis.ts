@@ -14,8 +14,9 @@ import {
   type WireSize,
 } from './data'
 import { selectFuse, type FuseSelectionResult } from './fuse-selection'
+import { buildPinouts, type Pinout } from './pinout'
 import { cutLengthFor, loadSegments, routeWires, type RoutedWire, type SegmentLoad } from './segments'
-import { sizeWire, type SizingResult } from './wire-sizing'
+import { sizeWire, type SizingInput, type SizingResult } from './wire-sizing'
 import type { Loom, LoomEdge, LoomNode, WireFamily } from './types'
 
 export type IssueSeverity = 'error' | 'warning' | 'info'
@@ -45,6 +46,7 @@ export type IssueCode =
   | 'empty_segment'
   | 'routed_length_conflict'
   | 'circuit_drop_exceeded'
+  | 'pinout_conflict'
 
 export interface Issue {
   code: IssueCode
@@ -63,6 +65,8 @@ export interface EdgeAnalysis {
   currentSource: 'override' | 'downstream_loads' | 'ground_return'
   inrush_a: number
   effectiveLength_mm: number
+  /** How many runs in series carry this one's load, including itself. */
+  pathRuns?: number
   /** Where the cut length came from. */
   lengthSource: 'authored' | 'routing'
   routing: RoutedWire | undefined
@@ -88,6 +92,8 @@ export interface LoomAnalysis {
     circuitCount: number
   }
   segments: SegmentLoad[]
+  /** Cavity assignments for every connector, explicit or filled in. */
+  pinouts: Pinout[]
   issues: Issue[]
   errorCount: number
   warningCount: number
@@ -256,6 +262,7 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
   /* ------------------------------ per-edge pass ---------------------------- */
 
   const analysed: EdgeAnalysis[] = []
+  const sizingInputs = new Map<string, SizingInput>()
 
   for (const edge of validEdges) {
     const fromNode = nodes.get(edge.fromNodeId)!
@@ -285,7 +292,7 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
     const protection =
       edge.protection ?? (fromNode.kind === 'source' ? fromNode.protection : undefined)
 
-    const sizing = sizeWire({
+    const sizingInput: SizingInput = {
       current_a,
       length_mm: effectiveLength_mm,
       class: edge.class,
@@ -303,7 +310,9 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
       fuseFamilies: protection ? [protection.familyId] : undefined,
       // If a rating is already specified, the conductor has to survive the fuse.
       minimumAmpacity_a: ground ? undefined : protection?.rating_a,
-    })
+    }
+    const sizing = sizeWire(sizingInput)
+    sizingInputs.set(edge.id, sizingInput)
 
     for (const err of sizing.errors) {
       issues.push({
@@ -512,8 +521,82 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
     }
   }
 
+  /* ------------------------- drop budget along a path ----------------------- */
+
+  // Sizing each run against the full class budget lets a load at the end of
+  // several runs in series see the sum of them. Rather than only reporting it,
+  // upsize until the path fits.
+  //
+  // Greedy, not proportional: tighten the single biggest contributor on each
+  // failing path, then look again. Sharing the budget out in proportion would
+  // force every run to tighten, including a 350 mm battery cable where a whole
+  // size up buys 0.02 %, and would fail the path if any one of them could not.
+  // Each round strictly reduces the total, so it converges; the round cap is a
+  // backstop, and whatever is still over afterwards gets reported below.
+  if (loom.settings.allocateDropBudget !== false) {
+    for (let round = 0; round < 8; round++) {
+      const failing = overBudgetPaths(analysed, nodes, sources)
+      if (failing.length === 0) break
+
+      let changed = false
+      for (const path of failing) {
+        const candidates = path.runs
+          .filter((r) => !r.edge.gaugeOverrideId && sizingInputs.has(r.edge.id))
+          .sort((a, b) => b.sizing.voltageDropPct - a.sizing.voltageDropPct)
+        for (const run of candidates) {
+          const input = sizingInputs.get(run.edge.id)!
+          // Ask for a quarter less drop than it currently makes, which lands on
+          // the next size up.
+          const target = (run.sizing.voltageDropPct * 0.75) / 100
+          const resized = sizeWire({ ...input, dropLimit: target })
+          if (resized.ok && resized.size && resized.size.area_mm2 > run.sizing.size!.area_mm2) {
+            run.sizing = resized
+            run.sizing.rationale +=
+              ' Upsized beyond this run\u2019s own budget so the whole path stays inside it.'
+            changed = true
+            break
+          }
+        }
+      }
+      if (!changed) break
+    }
+  }
+
+  // One circuit, one gauge. Sizing run by run can leave a short jumper thinner
+  // than the feed it continues, which is legal but means two reels on the bench
+  // for one circuit and the wrong one getting fitted. Lift the auto-sized runs
+  // of a circuit to the largest among them.
+  {
+    const largest = new Map<string, WireSize>()
+    for (const a of analysed) {
+      if (!a.sizing.size) continue
+      const current = largest.get(a.edge.circuitId)
+      if (!current || a.sizing.size.area_mm2 > current.area_mm2) {
+        largest.set(a.edge.circuitId, a.sizing.size)
+      }
+    }
+    for (const a of analysed) {
+      const target = largest.get(a.edge.circuitId)
+      const input = sizingInputs.get(a.edge.id)
+      if (!target || !input || a.edge.gaugeOverrideId || !a.sizing.size) continue
+      if (a.sizing.size.area_mm2 >= target.area_mm2) continue
+      const lifted = sizeWire({ ...input, gaugeOverrideId: target.id })
+      if (lifted.size) {
+        a.sizing = lifted
+        a.sizing.limitingConstraint = 'circuit_match'
+        a.sizing.rationale =
+          `${target.label} — matched to the largest run in ${a.edge.circuitId}, so the circuit ` +
+          `is one size on the bench. Its own constraints would allow smaller.`
+      }
+    }
+  }
+
   // A circuit built from two different gauges is legal but a trap on the bench:
   // the cut list shows two reels for one circuit and someone fits the wrong one.
+  //
+  // Runs last, after allocation and the circuit-match pass, so it reports the
+  // gauges that will actually be cut. Anything still mixed here involves a
+  // manual override, which is exactly when the warning is worth having.
   const gaugesByCircuit = new Map<string, Map<string, string[]>>()
   for (const a of analysed) {
     if (!a.sizing.size) continue
@@ -534,57 +617,21 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
 
   /* --------------------------- cumulative volt drop ------------------------- */
 
-  // Each run is sized against its own drop budget, but a load at the end of
-  // three runs in series sees the sum of all three. Splicing a run, or feeding
-  // through a connector, silently doubles the allowance unless the whole path
-  // is checked. This is the check that catches it.
-  {
-    const outgoing = new Map<string, EdgeAnalysis[]>()
-    for (const a of analysed) {
-      if (a.edge.class === 'ground') continue
-      outgoing.set(a.edge.fromNodeId, [...(outgoing.get(a.edge.fromNodeId) ?? []), a])
-    }
-    for (const source of sources) {
-      const stack: { nodeId: string; drop: number; path: EdgeAnalysis[] }[] = [
-        { nodeId: source.id, drop: 0, path: [] },
-      ]
-      const seen = new Set<string>()
-      while (stack.length) {
-        const step = stack.pop()!
-        const node = nodes.get(step.nodeId)
-        if (node?.kind === 'load' && step.path.length > 1) {
-          const limit = step.path[0]!.sizing.dropLimitPct
-          if (step.drop > limit) {
-            issues.push({
-              code: 'circuit_drop_exceeded',
-              severity: 'error',
-              nodeId: node.id,
-              edgeId: step.path[step.path.length - 1]!.edge.id,
-              message:
-                `"${node.name}" sees ${step.drop.toFixed(2)} % drop over ` +
-                `${step.path.length} runs in series (${step.path
-                  .map((p) => p.edge.circuitId)
-                  .join(' → ')}), against a ${limit.toFixed(1)} % budget. ` +
-                `Each run is inside its own budget; together they are not.`,
-              remedy: 'Upsize the longest run in the path, or shorten it.',
-            })
-          }
-        }
-        // A key on the path prevents a cycle from spinning without stopping a
-        // node legitimately reached by two different routes.
-        const key = `${step.nodeId}:${step.path.length}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        for (const next of outgoing.get(step.nodeId) ?? []) {
-          if (step.path.some((p) => p.edge.id === next.edge.id)) continue
-          stack.push({
-            nodeId: next.edge.toNodeId,
-            drop: step.drop + next.sizing.voltageDropPct,
-            path: [...step.path, next],
-          })
-        }
-      }
-    }
+  // Whatever the allocation pass could not fix — usually because every run on
+  // the path is manually sized — is reported rather than left silent.
+  for (const path of overBudgetPaths(analysed, nodes, sources)) {
+    issues.push({
+      code: 'circuit_drop_exceeded',
+      severity: 'error',
+      nodeId: path.load.id,
+      edgeId: path.runs[path.runs.length - 1]!.edge.id,
+      message:
+        `"${path.load.name}" sees ${path.total.toFixed(2)} % drop over ${path.runs.length} runs ` +
+        `in series (${path.runs.map((p) => p.edge.circuitId).join(' \u2192 ')}), against a ` +
+        `${path.limit.toFixed(1)} % budget. Each run is inside its own budget; together they ` +
+        `are not.`,
+      remedy: 'Upsize the longest run in the path, shorten it, or lift its gauge override.',
+    })
   }
 
   /* ------------------------------ bundle segments --------------------------- */
@@ -672,10 +719,7 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
   const wireLength_mm = wireLengthBySize.reduce((a, x) => a + x.length_mm, 0)
   const mass_g = wireLengthBySize.reduce((a, x) => a + x.mass_g, 0)
 
-  const errorCount = issues.filter((i) => i.severity === 'error').length
-  const warningCount = issues.filter((i) => i.severity === 'warning').length
-
-  return {
+  const result: LoomAnalysis = {
     loom,
     edges: analysed,
     byEdgeId: byId,
@@ -690,13 +734,92 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
       circuitCount: new Set(analysed.map((a) => a.edge.circuitId)).size,
     },
     segments: segmentLoads,
+    pinouts: [],
     issues,
-    errorCount,
-    warningCount,
+    errorCount: 0,
+    warningCount: 0,
   }
+
+  // Pin-outs are derived from the finished analysis, then folded back in. A
+  // cavity conflict is a defect like any other and belongs in the same list.
+  result.pinouts = buildPinouts(result, wireReferences(analysed))
+  for (const pinout of result.pinouts) {
+    for (const problem of pinout.problems) {
+      issues.push({
+        code: 'pinout_conflict',
+        severity: problem.severity,
+        nodeId: pinout.node.id,
+        message: `${pinout.node.name}: ${problem.message}`,
+      })
+    }
+  }
+
+  result.errorCount = issues.filter((i) => i.severity === 'error').length
+  result.warningCount = issues.filter((i) => i.severity === 'warning').length
+  return result
+}
+
+/**
+ * A unique label per physical wire: the circuit id when the circuit is a single
+ * run, suffixed /1, /2 when it is built from several. Two wires sharing a label
+ * on the bench is how the wrong one gets fitted.
+ */
+export function wireReferences(edges: EdgeAnalysis[]): Map<string, string> {
+  const perCircuit = new Map<string, number>()
+  for (const e of edges) {
+    perCircuit.set(e.edge.circuitId, (perCircuit.get(e.edge.circuitId) ?? 0) + 1)
+  }
+  const seen = new Map<string, number>()
+  const out = new Map<string, string>()
+  for (const e of [...edges].sort((a, b) =>
+    a.edge.circuitId.localeCompare(b.edge.circuitId, undefined, { numeric: true }),
+  )) {
+    const n = (seen.get(e.edge.circuitId) ?? 0) + 1
+    seen.set(e.edge.circuitId, n)
+    out.set(
+      e.edge.id,
+      (perCircuit.get(e.edge.circuitId) ?? 1) > 1 ? `${e.edge.circuitId}/${n}` : e.edge.circuitId,
+    )
+  }
+  return out
 }
 
 /* --------------------------------- helpers -------------------------------- */
+
+/** Source-to-load paths whose total drop is over the budget of the first run. */
+function overBudgetPaths(
+  analysed: EdgeAnalysis[],
+  nodes: Map<string, LoomNode>,
+  sources: LoomNode[],
+): { load: LoomNode; runs: EdgeAnalysis[]; total: number; limit: number }[] {
+  const outgoing = new Map<string, EdgeAnalysis[]>()
+  for (const a of analysed) {
+    if (a.edge.class === 'ground') continue
+    outgoing.set(a.edge.fromNodeId, [...(outgoing.get(a.edge.fromNodeId) ?? []), a])
+  }
+
+  const out: { load: LoomNode; runs: EdgeAnalysis[]; total: number; limit: number }[] = []
+  for (const source of sources) {
+    const stack: { nodeId: string; path: EdgeAnalysis[] }[] = [{ nodeId: source.id, path: [] }]
+    while (stack.length) {
+      const step = stack.pop()!
+      const node = nodes.get(step.nodeId)
+      if (node?.kind === 'load' && step.path.length > 1) {
+        for (const run of step.path) {
+          run.pathRuns = Math.max(run.pathRuns ?? 0, step.path.length)
+        }
+        const limit = step.path[0]!.sizing.dropLimitPct
+        const total = step.path.reduce((t, p) => t + p.sizing.voltageDropPct, 0)
+        if (total > limit) out.push({ load: node, runs: step.path, total, limit })
+      }
+      for (const next of outgoing.get(step.nodeId) ?? []) {
+        if (step.path.some((p) => p.edge.id === next.edge.id)) continue
+        stack.push({ nodeId: next.edge.toNodeId, path: [...step.path, next] })
+      }
+    }
+  }
+  return out
+}
 
 function inrushDownstream(
   nodes: Map<string, LoomNode>,

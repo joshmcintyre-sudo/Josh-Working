@@ -240,36 +240,39 @@ function NodeInspector({
       ) : null}
 
       {node.kind === 'connector' ? (
-        <fieldset className="grid grid-cols-2 gap-2 rounded-md border border-neutral-800 p-2.5">
-          <legend className="px-1 text-[11px] uppercase tracking-wide text-neutral-500">
-            Connector
-          </legend>
-          <Field label="Series">
-            <Select
-              value={node.connector?.seriesId ?? ''}
-              onChange={(e) =>
-                onPatch({ connector: { ways: 2, ...node.connector, seriesId: e.target.value } })
-              }
-            >
-              <option value="">—</option>
-              {CONNECTOR_SERIES.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label} ({s.currentRating_a} A/contact)
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Ways">
-            <NumberInput
-              value={node.connector?.ways}
-              onValueChange={(v) =>
-                onPatch({
-                  connector: { seriesId: '', ...node.connector, ways: v ?? 2 },
-                })
-              }
-            />
-          </Field>
-        </fieldset>
+        <>
+          <fieldset className="grid grid-cols-2 gap-2 rounded-md border border-neutral-800 p-2.5">
+            <legend className="px-1 text-[11px] uppercase tracking-wide text-neutral-500">
+              Connector
+            </legend>
+            <Field label="Series">
+              <Select
+                value={node.connector?.seriesId ?? ''}
+                onChange={(e) =>
+                  onPatch({ connector: { ways: 2, ...node.connector, seriesId: e.target.value } })
+                }
+              >
+                <option value="">—</option>
+                {CONNECTOR_SERIES.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label} ({s.currentRating_a} A/contact)
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Ways">
+              <NumberInput
+                value={node.connector?.ways}
+                onValueChange={(v) =>
+                  onPatch({
+                    connector: { seriesId: '', ...node.connector, ways: v ?? 2 },
+                  })
+                }
+              />
+            </Field>
+          </fieldset>
+          <PinoutEditor node={node} analysis={analysis} onPatch={onPatch} />
+        </>
       ) : null}
 
       <Field label="Protection at this node" hint="Applies to runs leaving this node that have none of their own.">
@@ -320,6 +323,7 @@ const CONSTRAINT_COPY: Record<string, string> = {
   both: 'Ampacity and drop both bind',
   fusibility: 'Upsized so a fuse fits',
   minimum_size: 'At the shop minimum size',
+  circuit_match: 'Matched to the rest of its circuit',
   override: 'Manually specified',
 }
 
@@ -626,5 +630,89 @@ function SegmentInspector({
         Delete bundle
       </Button>
     </div>
+  )
+}
+
+/* --------------------------------- pin-out -------------------------------- */
+
+/**
+ * Cavity assignment. Rows the designer has not set are shown as "auto" — the
+ * tool fills them in a stable order so the drawing always has a pin-out, but
+ * the distinction between a decision and a default is kept visible.
+ */
+function PinoutEditor({
+  node,
+  analysis,
+  onPatch,
+}: {
+  node: LoomNode
+  analysis: LoomAnalysis
+  onPatch: (patch: Partial<LoomNode>) => void
+}) {
+  const pinout = analysis.pinouts.find((p) => p.node.id === node.id)
+  if (!pinout) return null
+
+  // Circuits meeting here, not individual wires: a mated cavity joins one run
+  // on each side and both are the same circuit.
+  const candidates = [
+    ...new Map(
+      analysis.edges
+        .filter((e) => e.edge.fromNodeId === node.id || e.edge.toNodeId === node.id)
+        .map((e) => [e.edge.circuitId, e]),
+    ).values(),
+  ]
+
+  const setCavity = (cavity: number, circuitId: string) => {
+    const next: Record<string, string> = { ...(node.connector?.cavities ?? {}) }
+    // A circuit lives in exactly one cavity, so claiming it releases the old.
+    for (const [k, v] of Object.entries(next)) if (v === circuitId) delete next[k]
+    if (circuitId) next[String(cavity)] = circuitId
+    else delete next[String(cavity)]
+    onPatch({ connector: { ...node.connector!, cavities: next } })
+  }
+
+  return (
+    <fieldset className="space-y-1.5 rounded-md border border-neutral-800 p-2.5">
+      <legend className="px-1 text-[11px] uppercase tracking-wide text-neutral-500">Pin-out</legend>
+      {pinout.pins.map((pin) => (
+        <div key={pin.cavity} className="flex items-center gap-1.5">
+          <span className="w-5 shrink-0 text-right font-mono text-[11px] text-neutral-500">
+            {pin.cavity}
+          </span>
+          <Select
+            className="h-7 text-xs"
+            value={pin.circuitId ?? ''}
+            onChange={(e) => setCavity(pin.cavity, e.target.value)}
+          >
+            <option value="">empty — sealing plug</option>
+            {candidates.map((c) => (
+              <option key={c.edge.circuitId} value={c.edge.circuitId}>
+                {c.edge.circuitId} · {c.sizing.size?.label ?? '?'} · {amps(c.current_a)}
+              </option>
+            ))}
+          </Select>
+          {pin.circuitId && !pin.explicit ? <Badge tone="neutral">auto</Badge> : null}
+          {pin.overCurrent ? <Badge tone="error">over</Badge> : null}
+        </div>
+      ))}
+      <div className="flex items-center justify-between pt-1">
+        <span className="text-[11px] text-neutral-600">
+          {pinout.contactRating_a.toFixed(1)} A per contact
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            const next: Record<string, string> = {}
+            pinout.pins.forEach((p) => {
+              if (p.circuitId) next[String(p.cavity)] = p.circuitId
+            })
+            onPatch({ connector: { ...node.connector!, cavities: next } })
+          }}
+        >
+          Accept auto
+        </Button>
+      </div>
+    </fieldset>
   )
 }

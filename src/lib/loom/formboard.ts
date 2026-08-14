@@ -67,6 +67,10 @@ export interface FormboardTrunk {
   bundleOd_mm: number
   sleeving: string | null
   sleevingUndersized: boolean
+  /** Length of the path actually drawn on the board, in millimetres. */
+  drawnLength_mm: number
+  /** True when the drawn path and the stated length differ by over 10 %. */
+  lengthMismatch: boolean
   /** Board positions of tape wraps or ties. */
   tiePoints: { x: number; y: number }[]
 }
@@ -218,11 +222,19 @@ export function buildFormboard(analysis: LoomAnalysis): FormboardLayout {
     const points = load.segment.routing?.length
       ? [ends[0]!, ...load.segment.routing, ends[1]!]
       : ends
+    // Board coordinates are real millimetres, so the drawn path and the stated
+    // length are directly comparable. A bundle bent around an obstacle that
+    // still claims its straight-line length is telling the builder a lie.
+    const drawn = Math.round(polylineLength(points))
     return {
       segmentId: load.segment.id,
       label: load.segment.label ?? load.segment.id,
       points,
       length_mm: load.segment.length_mm,
+      drawnLength_mm: drawn,
+      lengthMismatch:
+        load.segment.length_mm > 0 &&
+        Math.abs(drawn - load.segment.length_mm) / load.segment.length_mm > 0.1,
       wireCount: load.edgeIds.length,
       bundleOd_mm: load.bundleOd_mm,
       sleeving: load.sleeving?.label ?? null,

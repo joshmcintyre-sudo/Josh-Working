@@ -63,8 +63,14 @@ export interface ConnectorSpec {
   /** Series id from data/connectors.json, e.g. "deutsch-dt". */
   seriesId: string
   ways: number
-  /** Cavity assignments, keyed by cavity number. */
+  /**
+   * Which wire is terminated in which cavity, keyed by cavity number as a
+   * string. The value is an edge id. Cavities left out are filled in a stable
+   * order for the drawing, so a connector is never shown without a pin-out.
+   */
   cavities?: Record<string, string>
+  /** Keying variant, e.g. "A" on a DT04-12PA. Matters when ordering. */
+  variant?: string
 }
 
 export interface SpliceSpec {
@@ -187,6 +193,12 @@ export interface LoomSettings {
   serviceLoop_mm: number
   /** Default wire beyond the bundle at each end of a routed run, in mm. */
   defaultTail_mm: number
+  /**
+   * Share the voltage-drop budget between runs in series so a load at the end
+   * of several is inside budget overall, not just run by run. Off means each
+   * run gets the full class budget and the cumulative excess is only reported.
+   */
+  allocateDropBudget?: boolean
 }
 
 export interface Loom {

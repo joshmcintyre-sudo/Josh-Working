@@ -10,7 +10,7 @@ manufacture overseas.
 ```bash
 bun install
 bun dev          # http://localhost:3000
-bun test         # 258 tests
+bun test         # 288 tests
 bun run typecheck
 bun run build
 ```
@@ -45,6 +45,7 @@ src/lib/loom/               the engineering core, no React
   wire-sizing.ts            sizeWire()
   fuse-selection.ts         selectFuse()
   segments.ts               bundle routing, diameter, sleeving
+  pinout.ts                 cavity assignment per connector
   mutations.ts              splice/split/duplicate/delete, pure functions
   analysis.ts               analyseLoom() — the single entry point
   bom.ts                    BOM, cut list, CSV
@@ -121,13 +122,26 @@ which segment the distance lands in and breaks it there, so the splice appears
 *on* the trunk where a builder needs it, rather than floating beside it with
 both halves unrouted. Do not simplify that away.
 
-**Per-run drop budgets do not add up.** Each run is sized against its own 3 %,
-so a load at the end of four runs in series can see 3.5 % while every run passes
-on its own. `circuit_drop_exceeded` walks source-to-load paths and catches it.
-Several demo runs carry a `gaugeOverrideId` purely because of this — the
-comments say so, and a test asserts that removing the override brings the
-failure back, so they cannot rot into cargo. Proper per-path budget allocation
-during sizing is still a gap.
+**Per-run drop budgets do not add up, so sizing runs three passes.** First each
+run against its own budget; then an allocation pass that upsizes the biggest
+contributor on any source-to-load path still over budget, greedily until it
+fits; then a circuit-match pass lifting every auto-sized run of a circuit to the
+largest among them, so one circuit is one reel on the bench. `mixed_gauge_circuit`
+and `circuit_drop_exceeded` run last and report whatever manual overrides left
+unresolved. Turn allocation off with `settings.allocateDropBudget: false` to see
+the raw per-run sizes.
+
+Greedy, not proportional: sharing the budget in proportion forces every run to
+tighten, including a 350 mm battery cable where a size up buys 0.02 %, and fails
+the path if any one of them cannot. Greedy also finds the shared trunk, so one
+upsize fixes several paths.
+
+**A cavity holds a circuit, not a wire.** A mated cavity joins a pin one side to
+a socket the other, so an inline connector has two runs in the same cavity and
+both are the same circuit. `connector.cavities` maps cavity number to circuit
+id. Unassigned cavities are filled in a stable order — supplies then returns,
+then by circuit id — so a drawing always has a pin-out, and the filled-in rows
+are marked `auto` so a default is never mistaken for a decision.
 
 **The drawing is scaled to fit, not 1:1.** So the pinned distance between two nodes
 is not the cut length. Every run is dimensioned with its authored length, the sheet
@@ -136,8 +150,11 @@ the two disagree by more than 10 %. Do not "fix" that warning by reconciling the
 numbers silently. Wires inside a bundle are exempt — the bundle owns the geometry,
 so comparing a wire to a straight line between its end nodes means nothing.
 
-**jsPDF's standard fonts are WinAnsi-encoded.** `⌀` and other non-Latin-1 glyphs
-render as garbage. Write "OD" instead. `·`, `—`, `²` and `×` are all fine.
+**jsPDF's standard fonts are WinAnsi-encoded.** Everything written to a PDF goes
+through `pdfSafe()`, which transliterates `→ ⌀ ≤ ≥ ×` and drops anything else —
+node names and notes are typed by people and an emoji would otherwise corrupt
+the sheet. WinAnsi is Latin-1 *plus* the 0x80-0x9F block, so `—`, smart quotes
+and `•` are fine and must not be stripped. `·`, `²` and `°` are Latin-1.
 
 ## Testing
 
@@ -160,16 +177,16 @@ dependency; add it temporarily and launch Chromium with
 - **The Supabase migration has never been run.** Schema, RLS and repository are
   written and the row mapping is round-trip tested, but no live project has been
   touched. Everything demonstrated so far ran on the local-storage repository.
-- **No per-path drop budget allocation.** Sizing is per run; the cumulative check
-  only reports. Upsizing is manual.
-- **No release/freeze UI.** `loom_wires` and `releaseWires()` exist and are tested;
-  nothing calls them. Exports always reflect current state.
+- **Releases are stored but not exported from.** The Release dialog freezes a
+  revision into `loom_wires`; the PDF and CSVs still render live state. Exporting
+  *from* a frozen release is not wired up.
 - **No auth UI.** `getRepository()` picks Supabase only when a user is already
   signed in.
-- Formboard runs and bundles are straight lines unless `routing` is set by hand;
-  there is no polyline routing editor.
 - Wires route through bundles automatically. `edge.segmentIds` forces a path but
   nothing in the UI sets it yet.
+- Bending a bundle changes its drawn path, not its `length_mm`. The board flags
+  the disagreement rather than reconciling it; the demo trips this widely because
+  its node positions were laid out for legibility, not measured.
 
 ## Working branch
 

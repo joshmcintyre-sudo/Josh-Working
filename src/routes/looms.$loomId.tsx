@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { ConfirmDialog, ContextMenu, DistancePrompt, type MenuItem } from '~/components/context-menu'
+import { ReleaseDialog } from '~/components/release-dialog'
 import { FormboardView } from '~/components/formboard-view'
 import { Inspector } from '~/components/inspector'
 import { LoadPalette } from '~/components/load-palette'
@@ -8,7 +9,7 @@ import { SchematicCanvas, type Selection } from '~/components/schematic-canvas'
 import { SummaryPanel } from '~/components/summary-panel'
 import { Badge, Button, Panel, Select } from '~/components/ui'
 import { nextCircuitId, nextId, useLoom } from '~/hooks/use-loom'
-import { downloadBom, downloadCutList, downloadDrawing } from '~/lib/export/download'
+import { downloadBom, downloadCutList, downloadDrawing, downloadPinouts } from '~/lib/export/download'
 import { inferWireClass, nodeDeletionImpact, segmentDeletionImpact } from '~/lib/loom/mutations'
 import type { AmpacityBasis, Loom, LoomEdge, LoomNode, NodeKind, WireFamily } from '~/lib/loom/types'
 import type { LoomAnalysis } from '~/lib/loom/analysis'
@@ -24,6 +25,8 @@ function Editor() {
   const [confirm, setConfirm] = useState<{ title: string; body: React.ReactNode; run: () => void } | null>(null)
   const [splice, setSplice] = useState<{ edgeId: string; max: number } | null>(null)
   const [bundleFrom, setBundleFrom] = useState<string | null>(null)
+  const [releasing, setReleasing] = useState(false)
+  const [released, setReleased] = useState<string | null>(null)
 
   if (ctx.loading) return <Shell><p className="p-8 text-sm text-neutral-600">Loading…</p></Shell>
   if (ctx.loadError || !ctx.loom || !ctx.analysis) {
@@ -170,6 +173,12 @@ function Editor() {
       const load = analysis.segments.find((x) => x.segment.id === selection.id)
       return [
         {
+          label: 'Straighten bundle',
+          disabled: !analysis.segments.find((x) => x.segment.id === selection.id)?.segment.routing
+            ?.length,
+          onSelect: () => ctx.patchSegment(selection.id, { routing: undefined }),
+        },
+        {
           label: 'Split bundle here…',
           hint: 'adds a breakout',
           onSelect: () =>
@@ -255,8 +264,14 @@ function Editor() {
         <Button size="sm" variant="ghost" onClick={() => downloadCutList(analysis)}>
           Cut list
         </Button>
+        <Button size="sm" variant="ghost" onClick={() => downloadPinouts(analysis)}>
+          Pin-outs
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => downloadBom(analysis)}>
           BOM
+        </Button>
+        <Button size="sm" variant="primary" onClick={() => setReleasing(true)}>
+          Release…
         </Button>
       </header>
 
@@ -327,6 +342,7 @@ function Editor() {
               selection={selection}
               onSelect={setSelection}
               onMoveNode={(id, formboardPosition) => ctx.patchNode(id, { formboardPosition })}
+              onRouteSegment={(id, routing) => ctx.patchSegment(id, { routing })}
               onContextMenu={(sel, at) => setMenu({ selection: sel, at })}
             />
           )}
@@ -362,6 +378,29 @@ function Editor() {
         <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center">
           <div className="rounded-md border border-sky-800 bg-sky-950/90 px-3 py-1.5 text-xs text-sky-200">
             Drawing a bundle — click the node it runs to. Esc to cancel.
+          </div>
+        </div>
+      ) : null}
+
+      {releasing ? (
+        <ReleaseDialog
+          analysis={analysis}
+          onClose={() => setReleasing(false)}
+          onReleased={(revision) => {
+            setReleasing(false)
+            setReleased(revision)
+            // The loom's own revision follows the release, so the next export
+            // is stamped with what was frozen.
+            ctx.patchLoom({ revision })
+            setTimeout(() => setReleased(null), 4000)
+          }}
+        />
+      ) : null}
+
+      {released ? (
+        <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center">
+          <div className="rounded-md border border-emerald-800 bg-emerald-950/90 px-3 py-1.5 text-xs text-emerald-200">
+            Revision {released} frozen. Exports still reflect current state; the release is stored.
           </div>
         </div>
       ) : null}
