@@ -12,7 +12,11 @@ import type { EdgeAnalysis, LoomAnalysis } from '~/lib/loom/analysis'
 import type { Loom, LoomNode, NodeKind } from '~/lib/loom/types'
 import { amps, cn } from '~/lib/utils'
 
-export type Selection = { kind: 'node'; id: string } | { kind: 'edge'; id: string } | null
+export type Selection =
+  | { kind: 'node'; id: string }
+  | { kind: 'edge'; id: string }
+  | { kind: 'segment'; id: string }
+  | null
 
 const NODE_W = 132
 const NODE_H = 44
@@ -32,6 +36,10 @@ interface Props {
   onSelect: (s: Selection) => void
   onMoveNode: (id: string, position: { x: number; y: number }) => void
   onConnect: (fromId: string, toId: string) => void
+  onContextMenu?: (selection: Selection, at: { x: number; y: number }) => void
+  /** Start a link from this node, e.g. when the quick menu begins a bundle. */
+  linkFromNodeId?: string | null
+  onLinkCancel?: () => void
 }
 
 export function SchematicCanvas({
@@ -41,10 +49,17 @@ export function SchematicCanvas({
   onSelect,
   onMoveNode,
   onConnect,
+  onContextMenu,
+  linkFromNodeId,
+  onLinkCancel,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null)
   const [linkFrom, setLinkFrom] = useState<string | null>(null)
+  // A link can also be started from outside, by the quick-action menu.
+  useEffect(() => {
+    if (linkFromNodeId !== undefined) setLinkFrom(linkFromNodeId)
+  }, [linkFromNodeId])
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null)
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
 
@@ -76,11 +91,12 @@ export function SchematicCanvas({
       if (e.key === 'Escape') {
         setLinkFrom(null)
         setPointer(null)
+        onLinkCancel?.()
       }
     }
     window.addEventListener('keydown', cancel)
     return () => window.removeEventListener('keydown', cancel)
-  }, [linkFrom])
+  }, [linkFrom, onLinkCancel])
 
   const nodeById = new Map(loom.nodes.map((n) => [n.id, n]))
   const centre = (n: LoomNode) => ({ x: n.position.x + NODE_W / 2, y: n.position.y + NODE_H / 2 })
@@ -139,6 +155,12 @@ export function SchematicCanvas({
                   (i) => i.edgeId === ea.edge.id && i.severity === 'error',
                 )}
                 onSelect={() => onSelect({ kind: 'edge', id: ea.edge.id })}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onSelect({ kind: 'edge', id: ea.edge.id })
+                  onContextMenu?.({ kind: 'edge', id: ea.edge.id }, { x: e.clientX, y: e.clientY })
+                }}
               />
             )
           })}
@@ -190,6 +212,12 @@ export function SchematicCanvas({
                 setLinkFrom(n.id)
                 setPointer(centre(n))
               }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onSelect({ kind: 'node', id: n.id })
+                onContextMenu?.({ kind: 'node', id: n.id }, { x: e.clientX, y: e.clientY })
+              }}
             />
           ))}
         </g>
@@ -231,6 +259,7 @@ function NodeShape({
   onPointerDown,
   onClick,
   onStartLink,
+  onContextMenu,
 }: {
   node: LoomNode
   selected: boolean
@@ -239,11 +268,16 @@ function NodeShape({
   onPointerDown: (e: React.PointerEvent) => void
   onClick: (e: React.MouseEvent) => void
   onStartLink: (e: React.MouseEvent) => void
+  onContextMenu: (e: React.MouseEvent) => void
 }) {
   const style = KIND_STYLE[node.kind]
   const current = node.load?.continuousCurrent_a ?? node.source?.capacity_a
   return (
-    <g transform={`translate(${node.position.x} ${node.position.y})`} className="cursor-grab">
+    <g
+      transform={`translate(${node.position.x} ${node.position.y})`}
+      className="cursor-grab"
+      onContextMenu={onContextMenu}
+    >
       <rect
         width={NODE_W}
         height={NODE_H}
@@ -305,6 +339,7 @@ function EdgeShape({
   selected,
   hasError,
   onSelect,
+  onContextMenu,
 }: {
   ea: EdgeAnalysis
   a: { x: number; y: number }
@@ -312,6 +347,7 @@ function EdgeShape({
   selected: boolean
   hasError: boolean
   onSelect: () => void
+  onContextMenu: (e: React.MouseEvent) => void
 }) {
   // A gentle S-curve reads better than a straight line when nodes are stacked.
   const dx = Math.max(40, Math.abs(b.x - a.x) * 0.4)
@@ -323,7 +359,7 @@ function EdgeShape({
     : `${ea.edge.circuitId} · unsized`
 
   return (
-    <g onClick={onSelect} className="cursor-pointer">
+    <g onClick={onSelect} onContextMenu={onContextMenu} className="cursor-pointer">
       <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
       <path
         d={d}

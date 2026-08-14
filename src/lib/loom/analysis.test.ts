@@ -287,11 +287,20 @@ describe('the demo loom', () => {
     expect(inv.fuse?.selected?.boltDown).toBe(true)
   })
 
-  it('is voltage-drop limited on the long unfused roof ground', () => {
-    const g = a.byEdgeId['e-lightbar-gnd']!
-    expect(g.sizing.limitingConstraint).toBe('voltage_drop')
-    expect(g.sizing.voltageDropPct).toBeLessThanOrEqual(3)
-    expect(g.sizing.ampacityDrivenSize!.area_mm2).toBeLessThan(g.sizing.size!.area_mm2)
+  it('carries the light bar feed above what that run alone would need', () => {
+    // The override exists because of the cumulative drop down the chain, not
+    // because of this run. Removing it must bring the failure back — otherwise
+    // the override is cargo and should go.
+    const withoutOverride = structuredClone(DEMO_LOOM)
+    const feed = withoutOverride.edges.find((e) => e.id === 'e-fb-lightbar')!
+    expect(feed.gaugeOverrideId).toBe('awg-12')
+    feed.gaugeOverrideId = undefined
+    const bare = analyseLoom(withoutOverride)
+    expect(bare.issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(true)
+    // ...and the run on its own was inside its budget all along.
+    expect(bare.byEdgeId['e-fb-lightbar']!.sizing.voltageDropPct).toBeLessThanOrEqual(
+      bare.byEdgeId['e-fb-lightbar']!.sizing.dropLimitPct,
+    )
   })
 
   it('upsizes the cab feed so a MIDI fuse fits under its rating', () => {
@@ -340,7 +349,9 @@ describe('the demo loom', () => {
   })
 
   it('totals wire length and mass for the BOM', () => {
-    const summed = DEMO_LOOM.edges.reduce((t, e) => t + e.length_mm, 0)
+    // Runs that follow the trunk take their length from it, so the total is the
+    // sum of the cut lengths the analysis derived, not of the authored figures.
+    const summed = a.edges.reduce((t, e) => t + e.effectiveLength_mm, 0)
     expect(a.totals.wireLength_mm).toBe(summed)
     expect(a.totals.mass_g).toBeGreaterThan(0)
     expect(a.totals.wireLengthBySize.length).toBeGreaterThan(1)
@@ -354,5 +365,67 @@ describe('the demo loom', () => {
     expect(withLoop.totals.wireLength_mm).toBe(
       a.totals.wireLength_mm + 100 * DEMO_LOOM.edges.length,
     )
+  })
+})
+
+describe('cumulative voltage drop along a circuit', () => {
+  it('is quiet when the runs in series stay inside the budget together', () => {
+    // C-201 is two runs: 1.66 % + 0.28 %, comfortably under 3 %.
+    expect(analyseLoom(DEMO_LOOM).issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(
+      false,
+    )
+  })
+
+  it('catches a load fed through runs that each pass but together do not', () => {
+    const loom = miniLoom({ load: { continuousCurrent_a: 10 } })
+    // Insert a mid-point so the feed becomes two runs in series, then make both
+    // long enough that each sits just inside 3 % while the pair does not.
+    loom.nodes.push({
+      id: 'mid',
+      kind: 'splice',
+      name: 'Mid',
+      location: 'x',
+      position: { x: 1, y: 1 },
+      splice: { method: 'crimp' },
+    })
+    loom.edges[0]!.toNodeId = 'mid'
+    loom.edges[0]!.length_mm = 2800
+    loom.edges[0]!.gaugeOverrideId = 'awg-14'
+    loom.edges.push({
+      id: 'feed2',
+      fromNodeId: 'mid',
+      toNodeId: 'load',
+      circuitId: 'C-1',
+      length_mm: 2800,
+      class: 'power',
+      returnPath: 'modeled',
+      gaugeOverrideId: 'awg-14',
+    })
+    const a = analyseLoom(loom)
+    // Each run on its own is inside budget.
+    for (const e of a.edges.filter((x) => x.edge.circuitId === 'C-1')) {
+      expect(e.sizing.voltageDropPct).toBeLessThanOrEqual(e.sizing.dropLimitPct)
+    }
+    // The load at the end of both is not.
+    expect(a.issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(true)
+  })
+
+  it('does not fire for a single run, which is already checked by sizing', () => {
+    const loom = miniLoom({ load: { continuousCurrent_a: 10 } })
+    expect(analyseLoom(loom).issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(false)
+  })
+
+  it('does not hang on a cycle', () => {
+    const loom = miniLoom({})
+    loom.edges.push({
+      id: 'back',
+      fromNodeId: 'load',
+      toNodeId: 'bat',
+      circuitId: 'C-X',
+      length_mm: 100,
+      class: 'power',
+      returnPath: 'modeled',
+    })
+    expect(() => analyseLoom(loom)).not.toThrow()
   })
 })

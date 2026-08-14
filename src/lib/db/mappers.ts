@@ -15,6 +15,7 @@ import type {
   Loom,
   LoomEdge,
   LoomNode,
+  LoomSegment,
   LoomSettings,
   NodeKind,
   ProtectionSpec,
@@ -24,7 +25,14 @@ import type {
   WireClass,
   WireFamily,
 } from '~/lib/loom/types'
-import type { AccessoryRow, LoomEdgeRow, LoomNodeRow, LoomRow, LoomWireRow } from './schema'
+import type {
+  AccessoryRow,
+  LoomEdgeRow,
+  LoomNodeRow,
+  LoomRow,
+  LoomSegmentRow,
+  LoomWireRow,
+} from './schema'
 
 const j = <T,>(v: unknown): T | undefined => (v == null ? undefined : (v as T))
 
@@ -34,6 +42,7 @@ export function loomFromRows(
   loom: LoomRow,
   nodes: LoomNodeRow[],
   edges: LoomEdgeRow[],
+  segments: LoomSegmentRow[] = [],
 ): Loom {
   return {
     id: loom.id,
@@ -44,6 +53,36 @@ export function loomFromRows(
     formboard: j<{ width_mm: number; height_mm: number }>(loom.formboard),
     nodes: nodes.map(nodeFromRow),
     edges: edges.map(edgeFromRow),
+    ...(segments.length ? { segments: segments.map(segmentFromRow) } : {}),
+  }
+}
+
+export function segmentFromRow(r: LoomSegmentRow): LoomSegment {
+  return {
+    id: r.segment_key,
+    fromNodeId: r.from_node_key,
+    toNodeId: r.to_node_key,
+    length_mm: Number(r.length_mm),
+    routing: j<{ x: number; y: number }[]>(r.routing),
+    sleevingId: r.sleeving_id ?? undefined,
+    ties: j<number[]>(r.ties),
+    label: r.label ?? undefined,
+    notes: r.notes ?? undefined,
+  }
+}
+
+export function segmentToRow(loomId: string, s: LoomSegment): LoomSegmentRow {
+  return {
+    loom_id: loomId,
+    segment_key: s.id,
+    from_node_key: s.fromNodeId,
+    to_node_key: s.toNodeId,
+    length_mm: s.length_mm,
+    routing: s.routing ?? null,
+    sleeving_id: s.sleevingId ?? null,
+    ties: s.ties ?? null,
+    label: s.label ?? null,
+    notes: s.notes ?? null,
   }
 }
 
@@ -104,6 +143,12 @@ export function edgeFromRow(r: LoomEdgeRow): LoomEdge {
     routing: j<{ x: number; y: number }[]>(r.routing),
     protection: j<ProtectionSpec>(r.protection),
     notes: r.notes ?? undefined,
+    segmentIds: j<string[]>(r.segment_keys),
+    lengthFromRouting: r.length_from_routing ?? undefined,
+    tails_mm:
+      r.tail_from_mm == null && r.tail_to_mm == null
+        ? undefined
+        : { from: Number(r.tail_from_mm ?? 0), to: Number(r.tail_to_mm ?? 0) },
   }
 }
 
@@ -128,6 +173,10 @@ export function edgeToRow(loomId: string, e: LoomEdge): LoomEdgeRow {
     routing: e.routing ?? null,
     protection: e.protection ?? null,
     notes: e.notes ?? null,
+    segment_keys: e.segmentIds ?? null,
+    length_from_routing: e.lengthFromRouting ?? null,
+    tail_from_mm: e.tails_mm?.from ?? null,
+    tail_to_mm: e.tails_mm?.to ?? null,
   }
 }
 

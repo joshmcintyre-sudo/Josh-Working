@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
+import { ConfirmDialog, ContextMenu, DistancePrompt, type MenuItem } from '~/components/context-menu'
 import { FormboardView } from '~/components/formboard-view'
 import { Inspector } from '~/components/inspector'
 import { LoadPalette } from '~/components/load-palette'
@@ -8,7 +9,9 @@ import { SummaryPanel } from '~/components/summary-panel'
 import { Badge, Button, Panel, Select } from '~/components/ui'
 import { nextCircuitId, nextId, useLoom } from '~/hooks/use-loom'
 import { downloadBom, downloadCutList, downloadDrawing } from '~/lib/export/download'
-import type { AmpacityBasis, LoomEdge, LoomNode, NodeKind, WireFamily } from '~/lib/loom/types'
+import { inferWireClass, nodeDeletionImpact, segmentDeletionImpact } from '~/lib/loom/mutations'
+import type { AmpacityBasis, Loom, LoomEdge, LoomNode, NodeKind, WireFamily } from '~/lib/loom/types'
+import type { LoomAnalysis } from '~/lib/loom/analysis'
 
 export const Route = createFileRoute('/looms/$loomId')({ component: Editor })
 
@@ -17,6 +20,10 @@ function Editor() {
   const ctx = useLoom(loomId)
   const [selection, setSelection] = useState<Selection>(null)
   const [view, setView] = useState<'schematic' | 'formboard'>('schematic')
+  const [menu, setMenu] = useState<{ selection: Selection; at: { x: number; y: number } } | null>(null)
+  const [confirm, setConfirm] = useState<{ title: string; body: React.ReactNode; run: () => void } | null>(null)
+  const [splice, setSplice] = useState<{ edgeId: string; max: number } | null>(null)
+  const [bundleFrom, setBundleFrom] = useState<string | null>(null)
 
   if (ctx.loading) return <Shell><p className="p-8 text-sm text-neutral-600">Loading…</p></Shell>
   if (ctx.loadError || !ctx.loom || !ctx.analysis) {
@@ -58,27 +65,143 @@ function Editor() {
   }
 
   const connect = (fromId: string, toId: string) => {
-    const to = loom.nodes.find((n) => n.id === toId)
-    const isGround = to?.kind === 'ground' || to?.kind === 'splice'
+    // Drawing a bundle instead of a wire.
+    if (bundleFrom) {
+      ctx.connectBundle(bundleFrom, toId, 500)
+      setBundleFrom(null)
+      return
+    }
     const from = loom.nodes.find((n) => n.id === fromId)
-    // A run into a ground node is a return; anything leaving a source is fused.
-    const groundRun = to?.kind === 'ground'
+    const wireClass = inferWireClass(loom, fromId, toId)
     const edge: LoomEdge = {
       id: nextId('run', loom.edges),
       fromNodeId: fromId,
       toNodeId: toId,
       circuitId: nextCircuitId(loom.edges),
       length_mm: 1000,
-      class: groundRun ? 'ground' : 'power',
+      class: wireClass,
       returnPath: 'modeled',
-      ...(groundRun || !from || isGround === undefined
-        ? {}
-        : from.kind === 'source' || from.kind === 'splice'
-          ? { protection: { familyId: 'ato' } }
-          : {}),
+      // A run leaving the battery or a distribution point is fused; a return
+      // never is.
+      ...(wireClass !== 'ground' && (from?.kind === 'source' || from?.kind === 'splice')
+        ? { protection: { familyId: 'ato' } }
+        : {}),
     }
     ctx.addEdge(edge)
     setSelection({ kind: 'edge', id: edge.id })
+  }
+
+  const askDelete = (selection: Selection) => {
+    if (!selection) return
+    if (selection.kind === 'node') {
+      const node = loom.nodes.find((n) => n.id === selection.id)
+      const impact = nodeDeletionImpact(loom, selection.id)
+      setConfirm({
+        title: `Delete "${node?.name ?? selection.id}"?`,
+        body: (
+          <>
+            This also removes {impact.edgeIds.length} run
+            {impact.edgeIds.length === 1 ? '' : 's'} and {impact.segmentIds.length} bundle
+            {impact.segmentIds.length === 1 ? '' : 's'} attached to it.
+            {impact.reroutedEdgeIds.length
+              ? ` ${impact.reroutedEdgeIds.length} more run(s) will need re-routing.`
+              : ''}
+          </>
+        ),
+        run: () => {
+          ctx.removeNode(selection.id)
+          setSelection(null)
+        },
+      })
+      return
+    }
+    if (selection.kind === 'segment') {
+      const impact = segmentDeletionImpact(loom, selection.id)
+      const load = analysis.segments.find((x) => x.segment.id === selection.id)
+      setConfirm({
+        title: `Delete bundle "${load?.segment.label ?? selection.id}"?`,
+        body: (
+          <>
+            {load?.edgeIds.length ?? 0} run(s) travel inside it. They stay, but will be re-routed or
+            drawn loose.
+            {impact.reroutedEdgeIds.length
+              ? ` ${impact.reroutedEdgeIds.length} name it explicitly and will fall back to automatic routing.`
+              : ''}
+          </>
+        ),
+        run: () => {
+          ctx.removeSegment(selection.id)
+          setSelection(null)
+        },
+      })
+      return
+    }
+    const ea = analysis.byEdgeId[selection.id]
+    setConfirm({
+      title: `Delete run ${ea?.edge.circuitId ?? selection.id}?`,
+      body: <>The wire is removed from the schedule, the cut list and the BOM.</>,
+      run: () => {
+        ctx.removeEdge(selection.id)
+        setSelection(null)
+      },
+    })
+  }
+
+  const menuItems = (selection: Selection): MenuItem[] => {
+    if (!selection) return []
+    if (selection.kind === 'node') {
+      const node = loom.nodes.find((n) => n.id === selection.id)
+      return [
+        { label: 'Duplicate', hint: 'with its ratings', onSelect: () => ctx.duplicate(selection.id) },
+        {
+          label: bundleFrom === selection.id ? 'Cancel bundle' : 'Start bundle from here',
+          onSelect: () => setBundleFrom(bundleFrom === selection.id ? null : selection.id),
+        },
+        {
+          label: 'Make this a ground point',
+          disabled: node?.kind === 'ground',
+          onSelect: () =>
+            ctx.patchNode(selection.id, { kind: 'ground', ground: { method: 'chassis', stud: 'M8' } }),
+        },
+        { label: 'Delete', danger: true, onSelect: () => askDelete(selection) },
+      ]
+    }
+    if (selection.kind === 'segment') {
+      const load = analysis.segments.find((x) => x.segment.id === selection.id)
+      return [
+        {
+          label: 'Split bundle here…',
+          hint: 'adds a breakout',
+          onSelect: () =>
+            load &&
+            setSplice({ edgeId: `segment:${selection.id}`, max: load.segment.length_mm }),
+        },
+        {
+          label: load?.recommendedSleeving ? `Fit ${load.recommendedSleeving.label.replace(/ ID.*/, '')}` : 'No sleeving suits',
+          disabled: !load?.recommendedSleeving,
+          onSelect: () =>
+            load?.recommendedSleeving &&
+            ctx.patchSegment(selection.id, { sleevingId: load.recommendedSleeving.id }),
+        },
+        { label: 'Delete bundle', danger: true, onSelect: () => askDelete(selection) },
+      ]
+    }
+    const ea = analysis.byEdgeId[selection.id]
+    return [
+      {
+        label: 'Insert splice…',
+        hint: 'mid-run',
+        onSelect: () => ea && setSplice({ edgeId: selection.id, max: ea.edge.length_mm }),
+      },
+      { label: 'Duplicate run', onSelect: () => ctx.duplicateRun(selection.id) },
+      {
+        label: ea?.edge.lengthFromRouting ? 'Use authored length' : 'Take length from bundle',
+        disabled: !ea || ea.routing?.unrouted,
+        onSelect: () =>
+          ctx.patchEdge(selection.id, { lengthFromRouting: !ea?.edge.lengthFromRouting }),
+      },
+      { label: 'Delete run', danger: true, onSelect: () => askDelete(selection) },
+    ]
   }
 
   return (
@@ -194,6 +317,9 @@ function Editor() {
               onSelect={setSelection}
               onMoveNode={(id, position) => ctx.patchNode(id, { position })}
               onConnect={connect}
+              onContextMenu={(sel, at) => setMenu({ selection: sel, at })}
+              linkFromNodeId={bundleFrom}
+              onLinkCancel={() => setBundleFrom(null)}
             />
           ) : (
             <FormboardView
@@ -201,6 +327,7 @@ function Editor() {
               selection={selection}
               onSelect={setSelection}
               onMoveNode={(id, formboardPosition) => ctx.patchNode(id, { formboardPosition })}
+              onContextMenu={(sel, at) => setMenu({ selection: sel, at })}
             />
           )}
         </main>
@@ -214,14 +341,10 @@ function Editor() {
                 selection={selection}
                 onPatchNode={ctx.patchNode}
                 onPatchEdge={ctx.patchEdge}
-                onRemoveNode={(id) => {
-                  ctx.removeNode(id)
-                  setSelection(null)
-                }}
-                onRemoveEdge={(id) => {
-                  ctx.removeEdge(id)
-                  setSelection(null)
-                }}
+                onPatchSegment={ctx.patchSegment}
+                onRemoveNode={(id) => askDelete({ kind: 'node', id })}
+                onRemoveEdge={(id) => askDelete({ kind: 'edge', id })}
+                onRemoveSegment={(id) => askDelete({ kind: 'segment', id })}
               />
             </Panel>
           </div>
@@ -234,10 +357,77 @@ function Editor() {
           </div>
         </aside>
       </div>
+
+      {bundleFrom ? (
+        <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center">
+          <div className="rounded-md border border-sky-800 bg-sky-950/90 px-3 py-1.5 text-xs text-sky-200">
+            Drawing a bundle — click the node it runs to. Esc to cancel.
+          </div>
+        </div>
+      ) : null}
+
+      {menu ? (
+        <ContextMenu
+          x={menu.at.x}
+          y={menu.at.y}
+          title={menuTitle(menu.selection, loom, analysis)}
+          items={menuItems(menu.selection)}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
+
+      {confirm ? (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          onConfirm={() => {
+            confirm.run()
+            setConfirm(null)
+          }}
+          onCancel={() => setConfirm(null)}
+        />
+      ) : null}
+
+      {splice ? (
+        <DistancePrompt
+          title={splice.edgeId.startsWith('segment:') ? 'Split bundle' : 'Insert splice'}
+          body={
+            splice.edgeId.startsWith('segment:')
+              ? 'Distance from the start of the bundle. A breakout node is added there and the bundle becomes two.'
+              : 'Distance from the source end. The run is cut there and a splice node is added, keeping the total length the same.'
+          }
+          max={splice.max}
+          defaultValue={Math.round(splice.max / 2)}
+          onConfirm={(value) => {
+            if (splice.edgeId.startsWith('segment:')) {
+              ctx.splitSegmentAt(splice.edgeId.slice('segment:'.length), value)
+            } else {
+              ctx.insertSplice(splice.edgeId, value)
+            }
+            // Both operations replace the thing that was selected, so holding
+            // the old id would leave the inspector reporting it as deleted.
+            setSelection(null)
+            setSplice(null)
+          }}
+          onCancel={() => setSplice(null)}
+        />
+      ) : null}
     </Shell>
   )
 }
 
+function menuTitle(selection: Selection, loom: Loom, analysis: LoomAnalysis): string {
+  if (!selection) return ''
+  if (selection.kind === 'node') {
+    return loom.nodes.find((n) => n.id === selection.id)?.name ?? selection.id
+  }
+  if (selection.kind === 'segment') {
+    const load = analysis.segments.find((s) => s.segment.id === selection.id)
+    return load?.segment.label ?? selection.id
+  }
+  return analysis.byEdgeId[selection.id]?.edge.circuitId ?? selection.id
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
-  return <div className="flex h-screen flex-col overflow-hidden">{children}</div>
+  return <div className="relative flex h-screen flex-col overflow-hidden">{children}</div>
 }

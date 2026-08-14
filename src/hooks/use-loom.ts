@@ -10,7 +10,16 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { getRepository } from '~/lib/db'
 import { analyseLoom, type LoomAnalysis } from '~/lib/loom/analysis'
-import type { Loom, LoomEdge, LoomNode, LoomSettings } from '~/lib/loom/types'
+import {
+  addSegment,
+  duplicateEdge,
+  duplicateNode,
+  insertSpliceInRun,
+  removeNode as removeNodeAndLinks,
+  removeSegment as removeSegmentAndRefs,
+  splitSegment,
+} from '~/lib/loom/mutations'
+import type { Loom, LoomEdge, LoomNode, LoomSegment, LoomSettings } from '~/lib/loom/types'
 
 const HISTORY_LIMIT = 100
 
@@ -24,6 +33,11 @@ type Action =
   | { type: 'addEdge'; edge: LoomEdge }
   | { type: 'patchEdge'; id: string; patch: Partial<LoomEdge> }
   | { type: 'removeEdge'; id: string }
+  | { type: 'addSegment'; segment: LoomSegment }
+  | { type: 'patchSegment'; id: string; patch: Partial<LoomSegment> }
+  | { type: 'removeSegment'; id: string }
+  /** A structural edit computed by a mutation function. */
+  | { type: 'replace'; loom: Loom }
   | { type: 'undo' }
   | { type: 'redo' }
 
@@ -56,14 +70,8 @@ function apply(loom: Loom, action: Action): Loom {
         nodes: loom.nodes.map((n) => (n.id === action.id ? { ...n, ...action.patch } : n)),
       }
     case 'removeNode':
-      return {
-        ...loom,
-        nodes: loom.nodes.filter((n) => n.id !== action.id),
-        // Runs to a deleted node would dangle, so they go with it.
-        edges: loom.edges.filter(
-          (e) => e.fromNodeId !== action.id && e.toNodeId !== action.id,
-        ),
-      }
+      // Runs and bundles touching a deleted node would dangle, so they go too.
+      return removeNodeAndLinks(loom, action.id)
     case 'addEdge':
       return { ...loom, edges: [...loom.edges, action.edge] }
     case 'patchEdge':
@@ -73,6 +81,19 @@ function apply(loom: Loom, action: Action): Loom {
       }
     case 'removeEdge':
       return { ...loom, edges: loom.edges.filter((e) => e.id !== action.id) }
+    case 'addSegment':
+      return { ...loom, segments: [...(loom.segments ?? []), action.segment] }
+    case 'patchSegment':
+      return {
+        ...loom,
+        segments: (loom.segments ?? []).map((s) =>
+          s.id === action.id ? { ...s, ...action.patch } : s,
+        ),
+      }
+    case 'removeSegment':
+      return removeSegmentAndRefs(loom, action.id)
+    case 'replace':
+      return action.loom
     default:
       return loom
   }
@@ -122,6 +143,14 @@ export function useLoom(loomId: string) {
     future: [],
     version: 0,
   })
+  const loomRef = useRef<Loom | null>(null)
+  loomRef.current = state.loom
+  const mutate = useCallback((fn: (loom: Loom) => Loom): Loom => {
+    const current = loomRef.current
+    if (!current) throw new Error('No loom loaded.')
+    return fn(current)
+  }, [])
+
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>('idle')
@@ -183,9 +212,37 @@ export function useLoom(loomId: string) {
       addEdge: (edge: LoomEdge) => dispatch({ type: 'addEdge', edge }),
       patchEdge: (id: string, patch: Partial<LoomEdge>) => dispatch({ type: 'patchEdge', id, patch }),
       removeEdge: (id: string) => dispatch({ type: 'removeEdge', id }),
+      addSegment: (segment: LoomSegment) => dispatch({ type: 'addSegment', segment }),
+      patchSegment: (id: string, patch: Partial<LoomSegment>) =>
+        dispatch({ type: 'patchSegment', id, patch }),
+      removeSegment: (id: string) => dispatch({ type: 'removeSegment', id }),
       undo: () => dispatch({ type: 'undo' }),
       redo: () => dispatch({ type: 'redo' }),
     }),
+    [],
+  )
+
+  /**
+   * Structural edits. Each runs a pure mutation against the current loom and
+   * replaces it wholesale, so they undo as a single step.
+   */
+  const structural = useMemo(
+    () => ({
+      insertSplice: (edgeId: string, distance_mm: number) =>
+        dispatch({ type: 'replace', loom: mutate((l) => insertSpliceInRun(l, edgeId, distance_mm).loom) }),
+      splitSegmentAt: (segmentId: string, distance_mm: number) =>
+        dispatch({ type: 'replace', loom: mutate((l) => splitSegment(l, segmentId, distance_mm).loom) }),
+      duplicate: (nodeId: string) =>
+        dispatch({ type: 'replace', loom: mutate((l) => duplicateNode(l, nodeId).loom) }),
+      duplicateRun: (edgeId: string) =>
+        dispatch({ type: 'replace', loom: mutate((l) => duplicateEdge(l, edgeId).loom) }),
+      connectBundle: (fromNodeId: string, toNodeId: string, length_mm: number) =>
+        dispatch({
+          type: 'replace',
+          loom: mutate((l) => addSegment(l, fromNodeId, toNodeId, length_mm).loom),
+        }),
+    }),
+    // `mutate` reads the latest loom out of the ref below, so this stays stable.
     [],
   )
 
@@ -215,6 +272,7 @@ export function useLoom(loomId: string) {
     canUndo: state.past.length > 0,
     canRedo: state.future.length > 0,
     ...actions,
+    ...structural,
   }
 }
 

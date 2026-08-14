@@ -24,16 +24,19 @@ export function FormboardView({
   selection,
   onSelect,
   onMoveNode,
+  onContextMenu,
 }: {
   analysis: LoomAnalysis
   selection: Selection
   onSelect: (s: Selection) => void
   onMoveNode: (id: string, formboardPosition: { x: number; y: number }) => void
+  onContextMenu?: (selection: Selection, at: { x: number; y: number }) => void
 }) {
   const layout: FormboardLayout = buildFormboard(analysis)
   const svgRef = useRef<SVGSVGElement>(null)
   const [drag, setDrag] = useState<{ id: string; dx: number; dy: number } | null>(null)
   const [snap, setSnap] = useState(true)
+  const [showWires, setShowWires] = useState(false)
 
   const board = layout.board
   const pad = 60
@@ -112,7 +115,68 @@ export function FormboardView({
             </text>
           ))}
 
+        {/* Bundles first, thick and underneath, so wires break out of them. */}
+        {layout.trunks.map((trunk) => {
+          const selected = selection?.kind === 'segment' && selection.id === trunk.segmentId
+          // Line weight is the real bundle diameter, floored so a single thin
+          // wire is still visible on a 2.4 m board.
+          // True scale in board millimetres, floored so a thin bundle is still
+          // clickable on a 2.4 m board.
+          const width = Math.max(12, trunk.bundleOd_mm)
+          const mid = midpoint(trunk.points)
+          return (
+            <g
+              key={trunk.segmentId}
+              className="cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+                onSelect({ kind: 'segment', id: trunk.segmentId })
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onSelect({ kind: 'segment', id: trunk.segmentId })
+                onContextMenu?.({ kind: 'segment', id: trunk.segmentId }, { x: e.clientX, y: e.clientY })
+              }}
+            >
+              <polyline
+                points={trunk.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                fill="none"
+                stroke={selected ? '#38bdf8' : trunk.sleevingUndersized ? '#ef4444' : '#71717a'}
+                strokeWidth={width + 7}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+              <polyline
+                points={trunk.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                fill="none"
+                stroke={trunk.sleeving ? '#27272a' : '#3f3f46'}
+                strokeWidth={width}
+                strokeDasharray={trunk.sleeving ? undefined : '30 18'}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+              {trunk.tiePoints.map((t, i) => (
+                <circle key={i} cx={t.x} cy={t.y} r={width / 2 + 4} fill="none" stroke="#facc15" strokeWidth={5} />
+              ))}
+              <text
+                x={mid.x}
+                y={mid.y - width / 2 - 12}
+                fontSize={22}
+                textAnchor="middle"
+                fill="#a1a1aa"
+                style={{ paintOrder: 'stroke', stroke: '#0a0a0a', strokeWidth: 6 }}
+              >
+                {trunk.label} · {trunk.wireCount}w · ⌀{trunk.bundleOd_mm} mm
+                {trunk.sleeving ? ` · ${trunk.sleeving.replace(/ ID.*/, '')}` : ''}
+              </text>
+            </g>
+          )
+        })}
+
         {layout.runs.map((run) => {
+          // A wire inside a trunk is represented by the trunk, not drawn again.
+          if (layout.bundledEdgeIds.has(run.edgeId) && !showWires) return null
           const selected = selection?.kind === 'edge' && selection.id === run.edgeId
           const bad = mismatched.has(run.circuitId)
           const mid = midpoint(run.points)
@@ -122,6 +186,12 @@ export function FormboardView({
               onClick={(e) => {
                 e.stopPropagation()
                 onSelect({ kind: 'edge', id: run.edgeId })
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onSelect({ kind: 'edge', id: run.edgeId })
+                onContextMenu?.({ kind: 'edge', id: run.edgeId }, { x: e.clientX, y: e.clientY })
               }}
               className="cursor-pointer"
             >
@@ -135,7 +205,7 @@ export function FormboardView({
                 points={run.points.map((p) => `${p.x},${p.y}`).join(' ')}
                 fill="none"
                 stroke={selected ? '#38bdf8' : run.color}
-                strokeWidth={selected ? 11 : 7}
+                strokeWidth={selected ? 9 : layout.bundledEdgeIds.has(run.edgeId) ? 4 : 7}
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 strokeDasharray={run.class === 'ground' ? '26 14' : undefined}
@@ -176,6 +246,12 @@ export function FormboardView({
                 const p = toBoard(e.clientX, e.clientY)
                 setDrag({ id: n.id, dx: p.x - n.x_mm, dy: p.y - n.y_mm })
                 onSelect({ kind: 'node', id: n.id })
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onSelect({ kind: 'node', id: n.id })
+                onContextMenu?.({ kind: 'node', id: n.id }, { x: e.clientX, y: e.clientY })
               }}
             >
               {n.isBranchPoint ? (
@@ -227,6 +303,16 @@ export function FormboardView({
           <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} />
           snap 10 mm
         </label>
+        {layout.trunks.length ? (
+          <label className="flex cursor-pointer items-center gap-1">
+            <input
+              type="checkbox"
+              checked={showWires}
+              onChange={(e) => setShowWires(e.target.checked)}
+            />
+            show wires in bundles
+          </label>
+        ) : null}
         {layout.fullyDerived ? (
           <Badge tone="warning">auto-placed</Badge>
         ) : (

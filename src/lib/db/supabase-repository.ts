@@ -11,9 +11,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ACCESSORY_CATALOG, type Accessory } from '~/lib/loom/accessories'
 import type { Loom } from '~/lib/loom/types'
-import { accessoryFromRow, accessoryToRow, edgeToRow, loomFromRows, nodeToRow } from './mappers'
+import {
+  accessoryFromRow,
+  accessoryToRow,
+  edgeToRow,
+  loomFromRows,
+  nodeToRow,
+  segmentToRow,
+} from './mappers'
 import type { LoomRepository, LoomSummary } from './repository'
-import type { AccessoryRow, LoomEdgeRow, LoomNodeRow, LoomRow, LoomWireRow } from './schema'
+import type {
+  AccessoryRow,
+  LoomEdgeRow,
+  LoomNodeRow,
+  LoomRow,
+  LoomSegmentRow,
+  LoomWireRow,
+} from './schema'
 
 function unwrap<T>(res: { data: T | null; error: { message: string } | null }, what: string): T {
   if (res.error) throw new Error(`${what}: ${res.error.message}`)
@@ -80,7 +94,11 @@ export class SupabaseLoomRepository implements LoomRepository {
       await this.db.from('loom_edges').select('*').eq('loom_id', id),
       'get edges',
     ) as LoomEdgeRow[]
-    return loomFromRows(data as LoomRow, nodes, edges)
+    const segments = unwrap(
+      await this.db.from('loom_segments').select('*').eq('loom_id', id),
+      'get segments',
+    ) as LoomSegmentRow[]
+    return loomFromRows(data as LoomRow, nodes, edges, segments)
   }
 
   async createLoom(loom: Loom): Promise<Loom> {
@@ -120,10 +138,14 @@ export class SupabaseLoomRepository implements LoomRepository {
     return loom
   }
 
-  /** Edges are deleted first and inserted last — they depend on the nodes. */
+  /**
+   * Edges and segments both reference nodes by composite key, so they are
+   * cleared first and written last. Nodes bracket everything.
+   */
   private async writeGraph(loomId: string, loom: Loom): Promise<void> {
     for (const [table, msg] of [
       ['loom_edges', 'clear edges'],
+      ['loom_segments', 'clear segments'],
       ['loom_nodes', 'clear nodes'],
     ] as const) {
       const { error } = await this.db.from(table).delete().eq('loom_id', loomId)
@@ -134,6 +156,12 @@ export class SupabaseLoomRepository implements LoomRepository {
         .from('loom_nodes')
         .insert(loom.nodes.map((n) => nodeToRow(loomId, n)))
       if (error) throw new Error(`write nodes: ${error.message}`)
+    }
+    if (loom.segments?.length) {
+      const { error } = await this.db
+        .from('loom_segments')
+        .insert(loom.segments.map((s) => segmentToRow(loomId, s)))
+      if (error) throw new Error(`write segments: ${error.message}`)
     }
     if (loom.edges.length) {
       const { error } = await this.db

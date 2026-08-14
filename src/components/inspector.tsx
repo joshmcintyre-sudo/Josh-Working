@@ -12,6 +12,7 @@ import {
   CONNECTOR_SERIES,
   FUSE_FAMILIES,
   INSULATIONS,
+  SLEEVING,
   sizesForFamily,
   type WireSize,
 } from '~/lib/loom/data'
@@ -20,6 +21,7 @@ import type {
   Loom,
   LoomEdge,
   LoomNode,
+  LoomSegment,
   NodeKind,
   ReturnPath,
   WireClass,
@@ -44,16 +46,20 @@ export function Inspector({
   selection,
   onPatchNode,
   onPatchEdge,
+  onPatchSegment,
   onRemoveNode,
   onRemoveEdge,
+  onRemoveSegment,
 }: {
   loom: Loom
   analysis: LoomAnalysis
   selection: Selection
   onPatchNode: (id: string, patch: Partial<LoomNode>) => void
   onPatchEdge: (id: string, patch: Partial<LoomEdge>) => void
+  onPatchSegment: (id: string, patch: Partial<LoomSegment>) => void
   onRemoveNode: (id: string) => void
   onRemoveEdge: (id: string) => void
+  onRemoveSegment: (id: string) => void
 }) {
   if (!selection) {
     return <EmptyState title="Nothing selected">Pick a node or a run on the canvas.</EmptyState>
@@ -67,6 +73,18 @@ export function Inspector({
         analysis={analysis}
         onPatch={(patch) => onPatchNode(node.id, patch)}
         onRemove={() => onRemoveNode(node.id)}
+      />
+    )
+  }
+  if (selection.kind === 'segment') {
+    const load = analysis.segments.find((s) => s.segment.id === selection.id)
+    if (!load) return <EmptyState title="That bundle has gone." />
+    return (
+      <SegmentInspector
+        analysis={analysis}
+        load={load}
+        onPatch={(patch) => onPatchSegment(selection.id, patch)}
+        onRemove={() => onRemoveSegment(selection.id)}
       />
     )
   }
@@ -500,6 +518,113 @@ function Meter({ label, ratio, value }: { label: string; ratio: number; value: s
       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-800">
         <div className={cn('h-full rounded-full', tone)} style={{ width: `${clamped * 100}%` }} />
       </div>
+    </div>
+  )
+}
+
+/* -------------------------------- segments -------------------------------- */
+
+function SegmentInspector({
+  analysis,
+  load,
+  onPatch,
+  onRemove,
+}: {
+  analysis: LoomAnalysis
+  load: LoomAnalysis['segments'][number]
+  onPatch: (patch: Partial<LoomSegment>) => void
+  onRemove: () => void
+}) {
+  const s = load.segment
+  const wires = load.edgeIds
+    .map((id) => analysis.byEdgeId[id])
+    .filter((e): e is NonNullable<typeof e> => Boolean(e))
+
+  return (
+    <div className="space-y-4 p-3">
+      <div className="rounded-md border border-neutral-800 bg-neutral-900/60 p-2.5">
+        <div className="flex items-baseline justify-between">
+          <span className="text-sm text-neutral-100">{s.label ?? s.id}</span>
+          <Badge tone={load.sleevingUndersized ? 'error' : 'neutral'}>
+            {load.edgeIds.length} wire{load.edgeIds.length === 1 ? '' : 's'}
+          </Badge>
+        </div>
+        <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-neutral-500">
+          <Row k="Bundle ⌀" v={`${load.bundleOd_mm} mm`} />
+          <Row k="Length" v={mm(s.length_mm)} />
+          <Row k="Conductor mass" v={`${Math.round(load.mass_g)} g`} />
+          <Row
+            k="Recommended"
+            v={load.recommendedSleeving?.label.replace(/ ID.*/, '') ?? 'none'}
+          />
+        </dl>
+        {load.sleevingUndersized ? (
+          <p className="mt-2 rounded border border-red-900/70 bg-red-950/40 p-1.5 text-[11px] text-red-200">
+            The fitted sleeving is smaller than the bundle. It will not close.
+          </p>
+        ) : null}
+      </div>
+
+      <Field label="Label">
+        <Input value={s.label ?? ''} onChange={(e) => onPatch({ label: e.target.value || undefined })} />
+      </Field>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Length (mm)" hint="Runs set to follow the trunk re-length from this.">
+          <NumberInput step="10" value={s.length_mm} onValueChange={(v) => onPatch({ length_mm: v ?? 0 })} />
+        </Field>
+        <Field label="Ties / wraps" hint="Evenly spaced marks on the board.">
+          <NumberInput
+            value={s.ties?.length ?? 0}
+            onValueChange={(v) => {
+              const n = Math.max(0, Math.round(v ?? 0))
+              onPatch({
+                ties: n === 0 ? undefined : Array.from({ length: n }, (_, i) => (i + 1) / (n + 1)),
+              })
+            }}
+          />
+        </Field>
+      </div>
+
+      <Field label="Sleeving / conduit" hint="Fitted over the whole bundle.">
+        <Select
+          value={s.sleevingId ?? ''}
+          onChange={(e) => onPatch({ sleevingId: e.target.value || undefined })}
+        >
+          <option value="">None — bare bundle</option>
+          {SLEEVING.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label} ({p.bundleOd_mm[0]}-{p.bundleOd_mm[1]} mm)
+            </option>
+          ))}
+        </Select>
+      </Field>
+
+      <div>
+        <h3 className="mb-1 text-[11px] uppercase tracking-wide text-neutral-500">Wires inside</h3>
+        {wires.length === 0 ? (
+          <p className="text-[11px] text-neutral-600">Nothing routed through this bundle yet.</p>
+        ) : (
+          <ul className="space-y-0.5">
+            {wires.map((w) => (
+              <li key={w.edge.id} className="flex justify-between text-[11px] text-neutral-400">
+                <span>{w.edge.circuitId}</span>
+                <span className="font-mono text-neutral-600">
+                  {w.sizing.size?.label ?? '-'} · {amps(w.current_a)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <Field label="Notes">
+        <Textarea value={s.notes ?? ''} onChange={(e) => onPatch({ notes: e.target.value || undefined })} />
+      </Field>
+
+      <Button variant="danger" size="sm" onClick={onRemove}>
+        Delete bundle
+      </Button>
     </div>
   )
 }

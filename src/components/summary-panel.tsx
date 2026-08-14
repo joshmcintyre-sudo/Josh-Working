@@ -110,6 +110,37 @@ function SummaryTab({ analysis }: { analysis: LoomAnalysis }) {
         </table>
       </div>
 
+      {analysis.segments.length ? (
+        <div>
+          <h3 className="mb-1.5 text-[11px] uppercase tracking-wide text-neutral-500">Bundles</h3>
+          <table className="w-full text-xs">
+            <tbody>
+              {analysis.segments.map((seg) => (
+                <tr key={seg.segment.id} className="border-b border-neutral-900">
+                  <td className="py-1 text-neutral-200">
+                    {seg.segment.label ?? seg.segment.id}
+                    {seg.sleevingUndersized ? (
+                      <Badge tone="error" className="ml-1">
+                        tight
+                      </Badge>
+                    ) : null}
+                  </td>
+                  <td className="py-1 text-right font-mono text-neutral-500 tabular-nums">
+                    {seg.edgeIds.length}w
+                  </td>
+                  <td className="py-1 text-right font-mono text-neutral-500 tabular-nums">
+                    ⌀{seg.bundleOd_mm}
+                  </td>
+                  <td className="py-1 text-right font-mono text-neutral-600 tabular-nums">
+                    {mm(seg.segment.length_mm)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
       <div>
         <h3 className="mb-1.5 text-[11px] uppercase tracking-wide text-neutral-500">
           What is driving each size

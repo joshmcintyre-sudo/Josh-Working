@@ -13,6 +13,8 @@ import {
   loomFromRows,
   nodeFromRow,
   nodeToRow,
+  segmentFromRow,
+  segmentToRow,
   wireRowsFromAnalysis,
 } from './mappers'
 
@@ -27,6 +29,22 @@ describe('row mapping round-trips', () => {
     for (const edge of DEMO_LOOM.edges) {
       expect(edgeFromRow(edgeToRow(DEMO_LOOM.id, edge))).toEqual(edge)
     }
+  })
+
+  it('preserves every bundle segment through a save and load', () => {
+    for (const segment of DEMO_LOOM.segments ?? []) {
+      expect(segmentFromRow(segmentToRow(DEMO_LOOM.id, segment))).toEqual(segment)
+    }
+  })
+
+  it('preserves a wire routed down an explicit bundle path', () => {
+    const edge = {
+      ...DEMO_LOOM.edges[0]!,
+      segmentIds: ['seg-a', 'seg-b'],
+      lengthFromRouting: true,
+      tails_mm: { from: 50, to: 120 },
+    }
+    expect(edgeFromRow(edgeToRow(DEMO_LOOM.id, edge))).toEqual(edge)
   })
 
   it('reassembles a whole loom from its rows', () => {
@@ -45,6 +63,7 @@ describe('row mapping round-trips', () => {
       },
       DEMO_LOOM.nodes.map((n) => nodeToRow(DEMO_LOOM.id, n)),
       DEMO_LOOM.edges.map((e) => edgeToRow(DEMO_LOOM.id, e)),
+      (DEMO_LOOM.segments ?? []).map((x) => segmentToRow(DEMO_LOOM.id, x)),
     )
     expect(rebuilt).toEqual(DEMO_LOOM)
   })
@@ -65,6 +84,7 @@ describe('row mapping round-trips', () => {
       },
       DEMO_LOOM.nodes.map((n) => nodeToRow(DEMO_LOOM.id, n)),
       DEMO_LOOM.edges.map((e) => edgeToRow(DEMO_LOOM.id, e)),
+      (DEMO_LOOM.segments ?? []).map((x) => segmentToRow(DEMO_LOOM.id, x)),
     )
     const before = analyseLoom(DEMO_LOOM)
     const after = analyseLoom(rebuilt)

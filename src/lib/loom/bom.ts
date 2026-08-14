@@ -265,9 +265,13 @@ export function buildBom(analysis: LoomAnalysis): Bom {
     })
   }
 
-  /* sleeving, sized from the bundle each run belongs to */
-  const sleeve = chooseSleeving(analysis)
-  if (sleeve) groups.push({ title: 'Protection sleeving', lines: [sleeve] })
+  /* sleeving and ties, taken from the bundle segments */
+  const sleeving = sleevingLines(analysis)
+  const ties = tieLines(analysis)
+  if (sleeving.length || ties.length) {
+    unresolved += sleeving.length + ties.length
+    groups.push({ title: 'Protection sleeving', lines: [...sleeving, ...ties] })
+  }
 
   return { groups, unresolvedPartNumbers: unresolved }
 }
@@ -286,30 +290,61 @@ function countTerminations(analysis: LoomAnalysis, node: LoomNode): number {
 }
 
 /**
- * Total run length that travels in a bundle, sized against the summed conductor
- * OD of the bundle it belongs to. Approximate by design — it is a shopping
- * figure, not a routing spec.
+ * Sleeving taken from the segments themselves rather than guessed.
+ *
+ * Where a segment has sleeving specified we order that; where it has none but
+ * the bundle diameter calls for some, the recommendation is listed separately
+ * so running bare is a decision rather than an omission.
  */
-function chooseSleeving(analysis: LoomAnalysis): BomLine | null {
-  const bundled = analysis.edges.filter((e) => (e.edge.bundleCount ?? 1) > 1 && e.sizing.size)
-  if (!bundled.length) return null
-  const length_mm = bundled.reduce((t, e) => t + e.effectiveLength_mm, 0)
-  const widest = Math.max(...bundled.map((e) => e.edge.bundleCount ?? 1))
-  const typicalOd = Math.max(
-    ...bundled.map((e) => Object.values(e.sizing.size!.od_mm)[0] ?? 2),
-  )
-  // Conductors pack roughly as sqrt(n) across a bundle.
-  const bundleOd = typicalOd * Math.sqrt(widest) * 1.15
-  const chosen =
-    SLEEVING.find((s) => bundleOd >= s.bundleOd_mm[0]! && bundleOd <= s.bundleOd_mm[1]!) ??
-    SLEEVING[SLEEVING.length - 1]!
-  return {
-    key: chosen.id,
-    description: chosen.label,
-    quantity: Math.ceil((length_mm / 1000 / widest) * 1.1 * 10) / 10,
-    unit: 'm',
-    note: `Bundle OD estimated at ${bundleOd.toFixed(0)} mm from ${widest} conductors.`,
+function sleevingLines(analysis: LoomAnalysis): BomLine[] {
+  const specified = new Map<string, number>()
+  const recommended = new Map<string, number>()
+  for (const load of analysis.segments) {
+    if (load.edgeIds.length === 0) continue
+    const sleeve = load.sleeving ?? load.recommendedSleeving
+    if (!sleeve) continue
+    const target = load.sleeving ? specified : recommended
+    target.set(sleeve.id, (target.get(sleeve.id) ?? 0) + load.segment.length_mm)
   }
+
+  const metres = (mm: number) => Math.ceil((mm / 1000) * 1.1 * 10) / 10
+  const lines: BomLine[] = []
+  for (const [id, length_mm] of specified) {
+    lines.push({
+      key: `sleeve-${id}`,
+      description: SLEEVING.find((s) => s.id === id)?.label ?? id,
+      quantity: metres(length_mm),
+      unit: 'm',
+      needsPartNumber: true,
+      note: `${(length_mm / 1000).toFixed(2)} m of bundle, incl. 10 % allowance`,
+    })
+  }
+  for (const [id, length_mm] of recommended) {
+    lines.push({
+      key: `sleeve-rec-${id}`,
+      description: `${SLEEVING.find((s) => s.id === id)?.label ?? id} — recommended, not specified`,
+      quantity: metres(length_mm),
+      unit: 'm',
+      needsPartNumber: true,
+      note: 'No sleeving set on these bundles. Confirm whether they are meant to run bare.',
+    })
+  }
+  return lines
+}
+
+/** Tape wraps and ties placed along the bundles. */
+function tieLines(analysis: LoomAnalysis): BomLine[] {
+  const ties = analysis.segments.reduce((t, s) => t + (s.segment.ties?.length ?? 0), 0)
+  if (ties === 0) return []
+  return [
+    {
+      key: 'ties',
+      description: 'Cable tie / tape wrap at marked positions',
+      quantity: ties,
+      needsPartNumber: true,
+      note: 'One per tie mark on the formboard.',
+    },
+  ]
 }
 
 /* -------------------------------- cut list -------------------------------- */

@@ -10,7 +10,7 @@ manufacture overseas.
 ```bash
 bun install
 bun dev          # http://localhost:3000
-bun test         # 181 tests
+bun test         # 258 tests
 bun run typecheck
 bun run build
 ```
@@ -40,13 +40,15 @@ data/                       reference data — the source of truth for all numbe
   accessories.json          shipped accessory catalogue (seeds the editable one)
 
 src/lib/loom/               the engineering core, no React
-  types.ts                  Loom / LoomNode / LoomEdge / LoomSettings
+  types.ts                  Loom / LoomNode / LoomEdge / LoomSegment / settings
   data.ts                   typed accessors + derating over /data
   wire-sizing.ts            sizeWire()
   fuse-selection.ts         selectFuse()
+  segments.ts               bundle routing, diameter, sleeving
+  mutations.ts              splice/split/duplicate/delete, pure functions
   analysis.ts               analyseLoom() — the single entry point
   bom.ts                    BOM, cut list, CSV
-  formboard.ts              board layout, scale
+  formboard.ts              board layout, trunk geometry, scale
   accessories.ts            catalogue types and node construction
   demo-loom.ts              seeded service-body loom
 
@@ -59,6 +61,26 @@ supabase/migrations/        schema + RLS
 
 `analyseLoom()` is the single entry point. The UI, the CSVs and the PDF all call
 it, so they cannot disagree about a wire size.
+
+## Two layers: wires and bundles
+
+**An edge is a wire. A segment is the bundle it travels inside.** Segments are
+the physical path on the board — the trunk and every branch off it. Wires are
+routed *through* segments, by shortest physical route unless the wire names its
+own path. This is why the board draws a thick taped trunk with breakouts rather
+than a fan of loose lines.
+
+Sleeving, conduit and tape belong to a **segment**, never to a wire, because
+that is how they are fitted. Bundle diameter is derived from the conductors
+inside at 75 % packing plus a tape allowance, and the sleeve is chosen from it.
+
+A run with `lengthFromRouting` takes its cut length from the segments it passes
+through plus its tails. That is the point of a trunk: lengthen the trunk and
+every wire inside it re-lengths. Runs without it keep their authored length, and
+a disagreement of more than 10 % is reported.
+
+A loom with no segments still works — every wire is unrouted and drawn loose,
+which is what the tool did before this layer existed.
 
 ## Rules that are not obvious from the code
 
@@ -94,12 +116,28 @@ number to make a line look complete.
 its cut list must not change because someone revised `wire.json`. A release freezes
 the schedule and stamps the reference-data revisions it was computed against.
 
+**Splicing a bundled wire splits the bundle too.** `insertSpliceInRun` finds
+which segment the distance lands in and breaks it there, so the splice appears
+*on* the trunk where a builder needs it, rather than floating beside it with
+both halves unrouted. Do not simplify that away.
+
+**Per-run drop budgets do not add up.** Each run is sized against its own 3 %,
+so a load at the end of four runs in series can see 3.5 % while every run passes
+on its own. `circuit_drop_exceeded` walks source-to-load paths and catches it.
+Several demo runs carry a `gaugeOverrideId` purely because of this — the
+comments say so, and a test asserts that removing the override brings the
+failure back, so they cannot rot into cargo. Proper per-path budget allocation
+during sizing is still a gap.
+
 **The drawing is scaled to fit, not 1:1.** So the pinned distance between two nodes
 is not the cut length. Every run is dimensioned with its authored length, the sheet
-says `NOT TO SCALE FOR MEASUREMENT`, and the formboard view flags runs where the two
-disagree by more than 10 %. Do not "fix" that warning by reconciling the numbers
-silently. The demo trips it on 16 runs because its board positions were laid out
-for legibility, not measured.
+says `NOT TO SCALE FOR MEASUREMENT`, and the formboard view flags loose runs where
+the two disagree by more than 10 %. Do not "fix" that warning by reconciling the
+numbers silently. Wires inside a bundle are exempt — the bundle owns the geometry,
+so comparing a wire to a straight line between its end nodes means nothing.
+
+**jsPDF's standard fonts are WinAnsi-encoded.** `⌀` and other non-Latin-1 glyphs
+render as garbage. Write "OD" instead. `·`, `—`, `²` and `×` are all fine.
 
 ## Testing
 
@@ -122,12 +160,16 @@ dependency; add it temporarily and launch Chromium with
 - **The Supabase migration has never been run.** Schema, RLS and repository are
   written and the row mapping is round-trip tested, but no live project has been
   touched. Everything demonstrated so far ran on the local-storage repository.
+- **No per-path drop budget allocation.** Sizing is per run; the cumulative check
+  only reports. Upsizing is manual.
 - **No release/freeze UI.** `loom_wires` and `releaseWires()` exist and are tested;
   nothing calls them. Exports always reflect current state.
 - **No auth UI.** `getRepository()` picks Supabase only when a user is already
   signed in.
-- Formboard runs are straight lines unless `edge.routing` is set by hand; there is
-  no routing editor.
+- Formboard runs and bundles are straight lines unless `routing` is set by hand;
+  there is no polyline routing editor.
+- Wires route through bundles automatically. `edge.segmentIds` forces a path but
+  nothing in the UI sets it yet.
 
 ## Working branch
 

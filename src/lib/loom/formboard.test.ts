@@ -86,11 +86,18 @@ describe('formboard layout', () => {
     expect(c101.drawnLength_mm).not.toBe(c101.cutLength_mm)
   })
 
-  it('reports where the board layout disagrees with the cut length', () => {
-    // The drawing is scaled to fit, so this is expected — but it must be
-    // surfaced rather than left for someone to discover with a tape measure.
-    expect(board.lengthMismatches.length).toBeGreaterThan(0)
-    for (const m of board.lengthMismatches) {
+  it('does not flag wires that live inside a bundle', () => {
+    // The bundle owns the geometry for the wires inside it, so comparing each
+    // wire's cut length to a straight line between its end nodes is meaningless.
+    expect(board.lengthMismatches).toEqual([])
+  })
+
+  it('still flags a loose wire whose drawn path disagrees with its length', () => {
+    const loose = structuredClone(DEMO_LOOM)
+    loose.segments = []
+    const mismatches = buildFormboard(analyseLoom(loose)).lengthMismatches
+    expect(mismatches.length).toBeGreaterThan(0)
+    for (const m of mismatches) {
       expect(Math.abs(m.cutLength_mm - m.drawnLength_mm) / m.cutLength_mm).toBeGreaterThan(0.1)
     }
   })

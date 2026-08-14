@@ -40,16 +40,36 @@ export function buildManufacturingDrawing(
   const layout = buildFormboard(analysis)
   const date = options.date ?? new Date()
 
-  drawFormboardPage(doc, analysis, layout, options, date)
+  // Tables overflow onto continuation pages, so the sheet count is not known
+  // until the content is laid out. Sections are recorded here and the title
+  // blocks stamped afterwards, so "Sheet 3 of 6" is always true.
+  const sections: { title: string; startPage: number; scale: string }[] = []
+
+  const scaleLabel = drawFormboardPage(doc, analysis, layout)
+  sections.push({ title: 'Formboard layout', startPage: 1, scale: scaleLabel })
 
   doc.addPage()
-  drawCutListPage(doc, analysis, options, date)
+  sections.push({ title: 'Cut list', startPage: doc.getNumberOfPages(), scale: 'n/a' })
+  drawCutListPage(doc, analysis)
 
   doc.addPage()
-  drawBomPage(doc, analysis, options, date)
+  sections.push({ title: 'Bill of materials', startPage: doc.getNumberOfPages(), scale: 'n/a' })
+  drawBomPage(doc, analysis)
 
   doc.addPage()
-  drawBasisPage(doc, analysis, options, date)
+  sections.push({ title: 'Bundle schedule', startPage: doc.getNumberOfPages(), scale: 'n/a' })
+  drawBundlePage(doc, analysis)
+
+  doc.addPage()
+  sections.push({ title: 'Engineering basis', startPage: doc.getNumberOfPages(), scale: 'n/a' })
+  drawBasisPage(doc, analysis)
+
+  const total = doc.getNumberOfPages()
+  for (let page = 1; page <= total; page++) {
+    doc.setPage(page)
+    const section = [...sections].reverse().find((x) => x.startPage <= page)!
+    titleBlock(doc, analysis, options, date, section.title, `Sheet ${page} of ${total}`, section.scale)
+  }
 
   return doc
 }
@@ -115,13 +135,7 @@ function titleBlock(
 
 /* ----------------------------- formboard page ----------------------------- */
 
-function drawFormboardPage(
-  doc: jsPDF,
-  analysis: LoomAnalysis,
-  layout: FormboardLayout,
-  options: DrawingOptions,
-  date: Date,
-) {
+function drawFormboardPage(doc: jsPDF, analysis: LoomAnalysis, layout: FormboardLayout): string {
   const drawArea = {
     x: MARGIN,
     y: MARGIN,
@@ -152,8 +166,53 @@ function drawFormboardPage(
     toY(0) - 2,
   )
 
-  // Runs.
+  // Bundles first and thick, so wires read as breaking out of them.
+  for (const trunk of layout.trunks) {
+    // Drawn at true scale: a 17 mm battery bundle really is six times the
+    // width of a 3 mm signal bundle, and exaggerating that makes the sheet
+    // unreadable. Floored so a single thin wire still prints.
+    const width = Math.max(0.9, trunk.bundleOd_mm * scale.ratio)
+    doc.setLineDashPattern([], 0)
+    doc.setDrawColor(25, 25, 25)
+    doc.setLineWidth(width)
+    doc.setLineCap('round')
+    doc.setLineJoin('round')
+    for (let i = 1; i < trunk.points.length; i++) {
+      doc.line(
+        toX(trunk.points[i - 1]!.x),
+        toY(trunk.points[i - 1]!.y),
+        toX(trunk.points[i]!.x),
+        toY(trunk.points[i]!.y),
+      )
+    }
+    // Tie / tape marks.
+    doc.setDrawColor(150, 110, 0)
+    doc.setLineWidth(0.5)
+    for (const tie of trunk.tiePoints) {
+      doc.circle(toX(tie.x), toY(tie.y), width / 2 + 0.5, 'S')
+    }
+    doc.setLineCap('butt')
+
+    const tMid = midpoint(trunk.points)
+    const tSeg = labelSegment(trunk.points)
+    let tAngle = (-Math.atan2(tSeg.b.y - tSeg.a.y, tSeg.b.x - tSeg.a.x) * 180) / Math.PI
+    if (tAngle > 90) tAngle -= 180
+    if (tAngle < -90) tAngle += 180
+    doc.setFontSize(5)
+    doc.setTextColor(70, 70, 70)
+    doc.text(
+      `${trunk.label} · ${trunk.wireCount}w · ${trunk.bundleOd_mm} mm${
+        trunk.sleeving ? ` · ${trunk.sleeving.replace(/ ID.*/, '')}` : ''
+      }`,
+      toX(tMid.x),
+      toY(tMid.y) - width / 2 - 1.2,
+      { align: 'center', baseline: 'bottom', angle: tAngle },
+    )
+  }
+
+  // Runs. Wires inside a bundle are represented by the bundle.
   for (const run of layout.runs) {
+    if (layout.bundledEdgeIds.has(run.edgeId)) continue
     const rgb = hexToRgb(run.color)
     doc.setDrawColor(rgb[0], rgb[1], rgb[2])
     doc.setLineWidth(run.class === 'ground' ? 0.5 : 0.8)
@@ -233,7 +292,8 @@ function drawFormboardPage(
   doc.setFontSize(5.5)
   doc.setTextColor(110, 110, 110)
   doc.text(
-    'Solid = supply  ·  Dashed = return  ·  Ringed dot = branch point  ·  ' +
+    'Thick black = bundle  ·  Amber ring = tie/tape  ·  Solid = supply  ·  Dashed = return  ·  ' +
+      'Ringed dot = branch point  ·  ' +
       'NOT TO SCALE FOR MEASUREMENT: cut to the dimensioned length, not to the drawing.',
     drawArea.x + 5,
     drawArea.y + drawArea.h - 1,
@@ -248,15 +308,7 @@ function drawFormboardPage(
     )
   }
 
-  titleBlock(
-    doc,
-    analysis,
-    options,
-    date,
-    'Formboard layout',
-    'Sheet 1 of 4',
-    scale.label,
-  )
+  return scale.label
 }
 
 function drawScaleBar(
@@ -297,12 +349,7 @@ function niceRound(value: number): number {
 
 /* ------------------------------- cut list --------------------------------- */
 
-function drawCutListPage(
-  doc: jsPDF,
-  analysis: LoomAnalysis,
-  options: DrawingOptions,
-  date: Date,
-) {
+function drawCutListPage(doc: jsPDF, analysis: LoomAnalysis) {
   const rows = buildCutList(analysis)
   autoTable(doc, {
     startY: MARGIN + 6,
@@ -333,12 +380,11 @@ function drawCutListPage(
       8: { cellWidth: 28 },
     },
   })
-  titleBlock(doc, analysis, options, date, 'Cut list', 'Sheet 2 of 4', 'n/a')
 }
 
 /* ---------------------------------- BOM ----------------------------------- */
 
-function drawBomPage(doc: jsPDF, analysis: LoomAnalysis, options: DrawingOptions, date: Date) {
+function drawBomPage(doc: jsPDF, analysis: LoomAnalysis) {
   const bom = buildBom(analysis)
   const body: (string | { content: string; colSpan?: number; styles?: object })[][] = []
   for (const group of bom.groups) {
@@ -388,12 +434,76 @@ function drawBomPage(doc: jsPDF, analysis: LoomAnalysis, options: DrawingOptions
     )
   }
 
-  titleBlock(doc, analysis, options, date, 'Bill of materials', 'Sheet 3 of 4', 'n/a')
+}
+
+/* ----------------------------- bundle schedule ---------------------------- */
+
+/**
+ * What goes inside each bundle: the wires, the finished diameter, and the
+ * sleeving fitted over it. Without this sheet a builder can see the trunk on
+ * the drawing but has no way to know what belongs in it.
+ */
+function drawBundlePage(doc: jsPDF, analysis: LoomAnalysis) {
+  if (analysis.segments.length === 0) {
+    doc.setFontSize(9)
+    doc.setTextColor(120, 120, 120)
+    doc.text(
+      'This loom has no bundles defined — every run is a loose wire.',
+      MARGIN,
+      MARGIN + 10,
+    )
+    return
+  }
+
+  autoTable(doc, {
+    startY: MARGIN + 6,
+    margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + TITLE_BLOCK_H + 6 },
+    head: [['Bundle', 'Length (mm)', 'Wires', 'Bundle OD', 'Sleeving', 'Ties', 'Contents']],
+    body: analysis.segments.map((load) => [
+      load.segment.label ?? load.segment.id,
+      String(load.segment.length_mm),
+      String(load.edgeIds.length),
+      `${load.bundleOd_mm} mm`,
+      load.sleeving
+        ? `${load.sleeving.label}${load.sleevingUndersized ? '  ** UNDERSIZED **' : ''}`
+        : load.recommendedSleeving
+          ? `none — ${load.recommendedSleeving.label} suits`
+          : 'none',
+      String(load.segment.ties?.length ?? 0),
+      load.edgeIds
+        .map((id) => {
+          const e = analysis.byEdgeId[id]
+          return e ? `${e.edge.circuitId} ${e.sizing.size?.label ?? ''}`.trim() : id
+        })
+        .join(', '),
+    ]),
+    styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: 210, lineWidth: 0.1, valign: 'top' },
+    headStyles: { fillColor: [40, 40, 40], fontSize: 6.5 },
+    columnStyles: {
+      0: { cellWidth: 46, fontStyle: 'bold' },
+      1: { cellWidth: 22, halign: 'right' },
+      2: { cellWidth: 16, halign: 'right' },
+      3: { cellWidth: 20, halign: 'right' },
+      4: { cellWidth: 58 },
+      5: { cellWidth: 14, halign: 'right' },
+    },
+  })
+
+  const y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 5
+  doc.setFontSize(6.5)
+  doc.setTextColor(110, 110, 110)
+  doc.text(
+    'Bundle diameter is estimated from the conductors inside at 75 % packing plus a tape allowance. ' +
+      'Confirm against the actual build before ordering sleeving to length.',
+    MARGIN,
+    y,
+    { maxWidth: SHEET.width - MARGIN * 2 },
+  )
 }
 
 /* --------------------------------- basis ---------------------------------- */
 
-function drawBasisPage(doc: jsPDF, analysis: LoomAnalysis, options: DrawingOptions, date: Date) {
+function drawBasisPage(doc: jsPDF, analysis: LoomAnalysis) {
   const s = analysis.loom.settings
   const basisLabel =
     s.ampacityBasis === 'as_nzs_3808'
@@ -452,7 +562,6 @@ function drawBasisPage(doc: jsPDF, analysis: LoomAnalysis, options: DrawingOptio
     })
   }
 
-  titleBlock(doc, analysis, options, date, 'Engineering basis', 'Sheet 4 of 4', 'n/a')
 }
 
 /* -------------------------------- helpers --------------------------------- */

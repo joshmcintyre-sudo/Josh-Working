@@ -14,6 +14,7 @@ import {
   type WireSize,
 } from './data'
 import { selectFuse, type FuseSelectionResult } from './fuse-selection'
+import { cutLengthFor, loadSegments, routeWires, type RoutedWire, type SegmentLoad } from './segments'
 import { sizeWire, type SizingResult } from './wire-sizing'
 import type { Loom, LoomEdge, LoomNode, WireFamily } from './types'
 
@@ -39,6 +40,11 @@ export type IssueCode =
   | 'mixed_gauge_circuit'
   | 'orphan_node'
   | 'interpolated_data'
+  | 'unrouted_wire'
+  | 'sleeving_undersized'
+  | 'empty_segment'
+  | 'routed_length_conflict'
+  | 'circuit_drop_exceeded'
 
 export interface Issue {
   code: IssueCode
@@ -57,6 +63,9 @@ export interface EdgeAnalysis {
   currentSource: 'override' | 'downstream_loads' | 'ground_return'
   inrush_a: number
   effectiveLength_mm: number
+  /** Where the cut length came from. */
+  lengthSource: 'authored' | 'routing'
+  routing: RoutedWire | undefined
   sizing: SizingResult
   fuse: FuseSelectionResult | null
   fromNode: LoomNode
@@ -78,6 +87,7 @@ export interface LoomAnalysis {
     mass_g: number
     circuitCount: number
   }
+  segments: SegmentLoad[]
   issues: Issue[]
   errorCount: number
   warningCount: number
@@ -207,6 +217,7 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
     validEdges.push(e)
   }
 
+  const routing = routeWires(loom)
   const downstream = makeDownstream(nodes, validEdges)
   const groundCurrent = makeGroundAccumulator(nodes, validEdges)
 
@@ -224,6 +235,12 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
   for (const e of validEdges) {
     touched.add(e.fromNodeId)
     touched.add(e.toNodeId)
+  }
+  // A breakout node can be joined by bundle segments alone, with wires merely
+  // passing through it. That is connected, not orphaned.
+  for (const seg of loom.segments ?? []) {
+    touched.add(seg.fromNodeId)
+    touched.add(seg.toNodeId)
   }
   for (const n of loom.nodes) {
     if (!touched.has(n.id)) {
@@ -259,7 +276,11 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
     }
 
     const inrush_a = ground ? current_a : inrushDownstream(nodes, validEdges, edge.toNodeId)
-    const effectiveLength_mm = edge.length_mm + loom.settings.serviceLoop_mm
+    const routed = routing.get(edge.id)
+    const cutLength = cutLengthFor(edge, routed)
+    const lengthSource: EdgeAnalysis['lengthSource'] =
+      cutLength === edge.length_mm ? 'authored' : 'routing'
+    const effectiveLength_mm = cutLength + loom.settings.serviceLoop_mm
     const family: WireFamily = edge.family ?? loom.settings.defaultFamily
     const protection =
       edge.protection ?? (fromNode.kind === 'source' ? fromNode.protection : undefined)
@@ -391,6 +412,8 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
       currentSource,
       inrush_a,
       effectiveLength_mm,
+      lengthSource,
+      routing: routed,
       sizing,
       fuse,
       fromNode,
@@ -509,6 +532,126 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
     })
   }
 
+  /* --------------------------- cumulative volt drop ------------------------- */
+
+  // Each run is sized against its own drop budget, but a load at the end of
+  // three runs in series sees the sum of all three. Splicing a run, or feeding
+  // through a connector, silently doubles the allowance unless the whole path
+  // is checked. This is the check that catches it.
+  {
+    const outgoing = new Map<string, EdgeAnalysis[]>()
+    for (const a of analysed) {
+      if (a.edge.class === 'ground') continue
+      outgoing.set(a.edge.fromNodeId, [...(outgoing.get(a.edge.fromNodeId) ?? []), a])
+    }
+    for (const source of sources) {
+      const stack: { nodeId: string; drop: number; path: EdgeAnalysis[] }[] = [
+        { nodeId: source.id, drop: 0, path: [] },
+      ]
+      const seen = new Set<string>()
+      while (stack.length) {
+        const step = stack.pop()!
+        const node = nodes.get(step.nodeId)
+        if (node?.kind === 'load' && step.path.length > 1) {
+          const limit = step.path[0]!.sizing.dropLimitPct
+          if (step.drop > limit) {
+            issues.push({
+              code: 'circuit_drop_exceeded',
+              severity: 'error',
+              nodeId: node.id,
+              edgeId: step.path[step.path.length - 1]!.edge.id,
+              message:
+                `"${node.name}" sees ${step.drop.toFixed(2)} % drop over ` +
+                `${step.path.length} runs in series (${step.path
+                  .map((p) => p.edge.circuitId)
+                  .join(' → ')}), against a ${limit.toFixed(1)} % budget. ` +
+                `Each run is inside its own budget; together they are not.`,
+              remedy: 'Upsize the longest run in the path, or shorten it.',
+            })
+          }
+        }
+        // A key on the path prevents a cycle from spinning without stopping a
+        // node legitimately reached by two different routes.
+        const key = `${step.nodeId}:${step.path.length}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        for (const next of outgoing.get(step.nodeId) ?? []) {
+          if (step.path.some((p) => p.edge.id === next.edge.id)) continue
+          stack.push({
+            nodeId: next.edge.toNodeId,
+            drop: step.drop + next.sizing.voltageDropPct,
+            path: [...step.path, next],
+          })
+        }
+      }
+    }
+  }
+
+  /* ------------------------------ bundle segments --------------------------- */
+
+  const sizeForEdge = (edgeId: string) => byId[edgeId]?.sizing.size ?? null
+  const segmentLoads = loadSegments(loom, routing, sizeForEdge)
+
+  for (const load of segmentLoads) {
+    if (load.edgeIds.length === 0) {
+      issues.push({
+        code: 'empty_segment',
+        severity: 'warning',
+        message: `Bundle "${load.segment.label ?? load.segment.id}" carries no wires.`,
+        remedy: 'Delete it, or connect the runs that should travel through it.',
+      })
+      continue
+    }
+    if (load.sleevingUndersized && load.sleeving) {
+      issues.push({
+        code: 'sleeving_undersized',
+        severity: 'error',
+        message:
+          `Bundle "${load.segment.label ?? load.segment.id}" is ${load.bundleOd_mm.toFixed(1)} mm ` +
+          `across but is sleeved in ${load.sleeving.label}, which tops out at ` +
+          `${load.sleeving.bundleOd_mm[1]} mm.`,
+        remedy: load.recommendedSleeving
+          ? `Use ${load.recommendedSleeving.label}.`
+          : 'Split the bundle or use a larger sleeve.',
+      })
+    }
+  }
+
+  // A wire the router could not thread through the bundle is drawn loose. On a
+  // loom that has a trunk at all, that is nearly always an oversight.
+  if ((loom.segments?.length ?? 0) > 0) {
+    for (const a of analysed) {
+      if (!a.routing?.unrouted) continue
+      issues.push({
+        code: 'unrouted_wire',
+        severity: 'warning',
+        edgeId: a.edge.id,
+        message: `${a.edge.circuitId} does not travel through any bundle — it will be drawn loose.`,
+        remedy: 'Add a segment between its ends, or accept it as a flying lead.',
+      })
+    }
+  }
+
+  // Routed length disagreeing with the authored figure means the trunk and the
+  // wire schedule are telling different stories.
+  for (const a of analysed) {
+    const r = a.routing
+    if (!r || r.unrouted || r.segmentIds.length === 0) continue
+    if (a.edge.lengthFromRouting) continue
+    const diff = Math.abs(r.routedLength_mm - a.edge.length_mm)
+    if (a.edge.length_mm > 0 && diff / a.edge.length_mm > 0.1) {
+      issues.push({
+        code: 'routed_length_conflict',
+        severity: 'warning',
+        edgeId: a.edge.id,
+        message:
+          `${a.edge.circuitId} is authored at ${a.edge.length_mm} mm but its bundle path plus ` +
+          `tails measures ${Math.round(r.routedLength_mm)} mm.`,
+        remedy: 'Switch the run to take its length from the routing, or correct one of the two.',
+      })
+    }
+  }
+
   /* ---------------------------------- totals -------------------------------- */
 
   const lengthBySizeId = new Map<string, number>()
@@ -546,6 +689,7 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
       mass_g,
       circuitCount: new Set(analysed.map((a) => a.edge.circuitId)).size,
     },
+    segments: segmentLoads,
     issues,
     errorCount,
     warningCount,

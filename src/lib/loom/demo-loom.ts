@@ -27,6 +27,9 @@ export const DEMO_LOOM: Loom = {
     defaultInsulationId: 'gxl',
     minimumSizeId: 'awg-20',
     serviceLoop_mm: 0,
+    // Demo lengths are quoted bundle-to-bundle, so no tail allowance here. New
+    // looms default to 75 mm a side.
+    defaultTail_mm: 0,
   },
   formboard: { width_mm: 2400, height_mm: 1200 },
   nodes: [
@@ -93,6 +96,15 @@ export const DEMO_LOOM: Loom = {
       position: { x: 520, y: 300 },
       formboardPosition: { x: 1180, y: 600 },
       splice: { method: 'busbar' },
+    },
+    {
+      id: 'roof_breakout',
+      kind: 'splice',
+      name: 'Roof trunk breakout',
+      location: 'Cab roof, LH A-pillar',
+      position: { x: 640, y: 220 },
+      formboardPosition: { x: 1600, y: 370 },
+      splice: { method: 'crimp', spliceId: 'splice-butt-1.5-2.5' },
     },
     {
       id: 'dt2_lightbar',
@@ -200,6 +212,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 1200,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       insulationId: 'battery_pvc',
       protection: { familyId: 'anl', holderId: 'holder-anl-inline' },
       notes: 'Fuse within 300 mm of the battery post.',
@@ -213,6 +226,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 1200,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       insulationId: 'battery_pvc',
       // Matched to the positive feed. Shop convention: negative is cut from the
       // same reel as the positive on any run this size.
@@ -229,6 +243,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 350,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       insulationId: 'battery_pvc',
       protection: { familyId: 'mega', holderId: 'holder-mega-stud' },
     },
@@ -241,6 +256,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 800,
       class: 'charging',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       protection: { familyId: 'midi', rating_a: 60, holderId: 'holder-midi-stud' },
       notes: 'Redarc FK60 input fuse kit.',
     },
@@ -252,6 +268,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 800,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       gaugeOverrideId: 'awg-6',
     },
     {
@@ -263,6 +280,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 900,
       class: 'charging',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       protection: { familyId: 'midi', rating_a: 40, holderId: 'holder-midi-stud' },
       notes: 'Redarc FK40 input fuse kit.',
     },
@@ -274,6 +292,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 900,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       gaugeOverrideId: 'awg-10',
     },
     {
@@ -285,6 +304,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 3200,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       protection: { familyId: 'midi', holderId: 'holder-midi-stud' },
       bundleCount: 2,
       notes: 'Runs the length of the chassis rail into the cab.',
@@ -300,8 +320,13 @@ export const DEMO_LOOM: Loom = {
       length_mm: 2400,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       protection: { familyId: 'ato' },
       bundleCount: 4,
+      // Upsized from the 14 AWG this run alone would take. The light bar sits
+      // at the end of four runs in series and the cumulative drop check fails
+      // at 14 AWG — each run passes on its own, the chain does not.
+      gaugeOverrideId: 'awg-12',
     },
     {
       id: 'e-dt-lightbar',
@@ -311,8 +336,9 @@ export const DEMO_LOOM: Loom = {
       length_mm: 400,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       // Same gauge as the feed so C-201 is one reel on the cut list.
-      gaugeOverrideId: 'awg-14',
+      gaugeOverrideId: 'awg-12',
     },
     {
       id: 'e-fb-strobe',
@@ -323,6 +349,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 2600,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       protection: { familyId: 'ato' },
       bundleCount: 4,
     },
@@ -334,6 +361,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 300,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
     },
     {
       id: 'e-fb-buzzer',
@@ -344,6 +372,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 600,
       class: 'signal',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       protection: { familyId: 'ato' },
       bundleCount: 4,
     },
@@ -356,8 +385,12 @@ export const DEMO_LOOM: Loom = {
       length_mm: 1800,
       class: 'power',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       protection: { familyId: 'ato' },
       bundleCount: 4,
+      // Upsized from 18 AWG for the same reason as C-201: the cumulative drop
+      // from the battery through the busbar and the cab block exceeds 3 %.
+      gaugeOverrideId: 'awg-16',
     },
 
     /* ---- returns ---- */
@@ -369,7 +402,9 @@ export const DEMO_LOOM: Loom = {
       length_mm: 2800,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       bundleCount: 4,
+      gaugeOverrideId: 'awg-12',
     },
     {
       id: 'e-strobe-gnd',
@@ -379,6 +414,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 2900,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       bundleCount: 4,
     },
     {
@@ -389,6 +425,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 600,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       bundleCount: 4,
     },
     {
@@ -399,8 +436,9 @@ export const DEMO_LOOM: Loom = {
       length_mm: 1800,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
       bundleCount: 4,
-      gaugeOverrideId: 'awg-18',
+      gaugeOverrideId: 'awg-16',
     },
     {
       id: 'e-gndcab-chassis',
@@ -411,6 +449,49 @@ export const DEMO_LOOM: Loom = {
       length_mm: 500,
       class: 'ground',
       returnPath: 'modeled',
+      lengthFromRouting: true,
     },
+  ],
+  segments: [
+    /* under-tray, straight off the battery */
+    { id: 'seg-bat-inv', fromNodeId: 'bat', toNodeId: 'inverter', length_mm: 1200, label: 'Inverter feed', sleevingId: 'convoluted-25' },
+    { id: 'seg-inv-gnd', fromNodeId: 'inverter', toNodeId: 'gnd_bat', length_mm: 1200, label: 'Inverter return', sleevingId: 'convoluted-25' },
+    { id: 'seg-bat-bus', fromNodeId: 'bat', toNodeId: 'busbar', length_mm: 350, label: 'Busbar feed', sleevingId: 'convoluted-20' },
+    { id: 'seg-bus-dcdc50', fromNodeId: 'busbar', toNodeId: 'dcdc50', length_mm: 800, label: 'DC-DC 50 A', sleevingId: 'convoluted-16' },
+    { id: 'seg-dcdc50-gnd', fromNodeId: 'dcdc50', toNodeId: 'gnd_bat', length_mm: 800, sleevingId: 'convoluted-16' },
+    { id: 'seg-bus-dcdc25', fromNodeId: 'busbar', toNodeId: 'dcdc25', length_mm: 900, label: 'DC-DC 25 A', sleevingId: 'convoluted-13' },
+    { id: 'seg-dcdc25-gnd', fromNodeId: 'dcdc25', toNodeId: 'gnd_bat', length_mm: 900, sleevingId: 'convoluted-13' },
+
+    /* the main chassis trunk into the cab — the fat one */
+    {
+      id: 'seg-bus-cab',
+      fromNodeId: 'busbar',
+      toNodeId: 'fuseblock',
+      length_mm: 3200,
+      label: 'Main chassis trunk',
+      sleevingId: 'convoluted-16',
+      ties: [0.15, 0.35, 0.55, 0.75, 0.95],
+    },
+    { id: 'seg-cab-gnd', fromNodeId: 'fuseblock', toNodeId: 'gnd_cab', length_mm: 200, label: 'Cab ground jumper' },
+    { id: 'seg-gnd-chassis', fromNodeId: 'gnd_cab', toNodeId: 'gnd_chassis', length_mm: 500, label: 'Chassis strap' },
+
+    /* roof trunk: four wires share it up the A-pillar, then it breaks out */
+    {
+      id: 'seg-cab-roof',
+      fromNodeId: 'fuseblock',
+      toNodeId: 'roof_breakout',
+      length_mm: 2100,
+      label: 'Roof trunk',
+      sleevingId: 'convoluted-10',
+      ties: [0.2, 0.5, 0.8],
+    },
+    { id: 'seg-roof-lb', fromNodeId: 'roof_breakout', toNodeId: 'dt2_lightbar', length_mm: 300, label: 'Light bar breakout' },
+    { id: 'seg-roof-st', fromNodeId: 'roof_breakout', toNodeId: 'dtm2_strobe', length_mm: 500, label: 'Strobe breakout' },
+    { id: 'seg-lb-load', fromNodeId: 'dt2_lightbar', toNodeId: 'lightbar', length_mm: 400 },
+    { id: 'seg-st-load', fromNodeId: 'dtm2_strobe', toNodeId: 'strobe', length_mm: 300 },
+
+    /* rear breakouts off the cab block */
+    { id: 'seg-cab-rear', fromNodeId: 'fuseblock', toNodeId: 'buzzer', length_mm: 600, label: 'Reverse buzzer', sleevingId: 'convoluted-7' },
+    { id: 'seg-cab-lock', fromNodeId: 'fuseblock', toNodeId: 'locking', length_mm: 1800, label: 'Central locking', sleevingId: 'convoluted-7' },
   ],
 }

@@ -16,8 +16,25 @@ function textOf(doc: ReturnType<typeof buildManufacturingDrawing>): string {
 describe('manufacturing drawing', () => {
   const doc = buildManufacturingDrawing(analysis, { date: FIXED_DATE, drawnBy: 'J. McIntyre' })
 
-  it('produces four sheets', () => {
-    expect(doc.getNumberOfPages()).toBe(4)
+  it('produces at least one sheet per section', () => {
+    // Tables spill onto continuation pages, so this is a floor, not a fixed
+    // count. The sheet numbering is checked below.
+    expect(doc.getNumberOfPages()).toBeGreaterThanOrEqual(5)
+  })
+
+  it('numbers every sheet against the real total', () => {
+    const total = doc.getNumberOfPages()
+    const out = textOf(doc)
+    for (let page = 1; page <= total; page++) {
+      expect(out).toContain(`Sheet ${page} of ${total}`)
+    }
+  })
+
+  it('schedules what goes inside each bundle', () => {
+    const out = textOf(doc)
+    expect(out).toContain('Bundle schedule')
+    expect(out).toContain('Roof trunk')
+    expect(out).toContain('Main chassis trunk')
   })
 
   it('is deterministic for a fixed date', () => {
@@ -65,7 +82,7 @@ describe('manufacturing drawing', () => {
       nodes: DEMO_LOOM.nodes.map((n) => ({ ...n, formboardPosition: undefined })),
     })
     const d = buildManufacturingDrawing(bare, { date: FIXED_DATE })
-    expect(d.getNumberOfPages()).toBe(4)
+    expect(d.getNumberOfPages()).toBeGreaterThanOrEqual(5)
     expect(d.output()).toContain('auto-derived')
   })
 

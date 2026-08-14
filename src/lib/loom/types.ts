@@ -104,6 +104,30 @@ export interface LoomNode {
   notes?: string
 }
 
+/**
+ * A physical path on the board that wires travel inside — the trunk, and every
+ * branch off it.
+ *
+ * This is the layer that makes the drawing look like a harness rather than a
+ * schematic. Sleeving, conduit and tape are properties of a segment, never of a
+ * wire, because that is how they are physically fitted: over the bundle.
+ */
+export interface LoomSegment {
+  id: string
+  fromNodeId: string
+  toNodeId: string
+  /** Physical length of the bundle along this path, in millimetres. */
+  length_mm: number
+  /** Board routing polyline in mm between the two ends. Straight if absent. */
+  routing?: { x: number; y: number }[]
+  /** Sleeving id from data/connectors.json `protection`. */
+  sleevingId?: string
+  /** Positions of tape wraps or ties along the segment, as fractions 0..1. */
+  ties?: number[]
+  label?: string
+  notes?: string
+}
+
 export interface LoomEdge {
   id: string
   fromNodeId: string
@@ -130,6 +154,19 @@ export interface LoomEdge {
   ambient_c?: number
   /** Formboard routing polyline in millimetres. Straight line if absent. */
   routing?: { x: number; y: number }[]
+  /**
+   * Ordered segments this wire travels through. Omit to let the router work it
+   * out from the segment graph; set it to force a wire down a specific path.
+   */
+  segmentIds?: string[]
+  /**
+   * Take the cut length from the segments the wire is routed through plus its
+   * tails, instead of the authored `length_mm`. This is what makes a trunk
+   * useful: move the trunk and every wire in it re-lengths.
+   */
+  lengthFromRouting?: boolean
+  /** Wire beyond the bundle at each end, for breakout and termination. */
+  tails_mm?: { from: number; to: number }
   /** Protection device in series with this run, at the source end. */
   protection?: ProtectionSpec
   notes?: string
@@ -148,6 +185,8 @@ export interface LoomSettings {
   minimumSizeId: string
   /** Extra length added to every run for service loops and dress, in mm. */
   serviceLoop_mm: number
+  /** Default wire beyond the bundle at each end of a routed run, in mm. */
+  defaultTail_mm: number
 }
 
 export interface Loom {
@@ -158,6 +197,8 @@ export interface Loom {
   settings: LoomSettings
   nodes: LoomNode[]
   edges: LoomEdge[]
+  /** Physical bundle paths. A loom with none draws as loose wires. */
+  segments?: LoomSegment[]
   /** Formboard sheet size in mm, used to paginate the 1:1 drawing. */
   formboard?: { width_mm: number; height_mm: number }
 }
@@ -170,4 +211,5 @@ export const DEFAULT_SETTINGS: LoomSettings = {
   defaultInsulationId: 'gxl',
   minimumSizeId: 'awg-20',
   serviceLoop_mm: 0,
+  defaultTail_mm: 75,
 }

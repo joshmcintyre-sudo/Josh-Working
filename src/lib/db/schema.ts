@@ -52,6 +52,24 @@ export interface LoomEdgeRow {
   routing: unknown
   protection: unknown
   notes: string | null
+  segment_keys: unknown
+  length_from_routing: boolean | null
+  tail_from_mm: number | null
+  tail_to_mm: number | null
+}
+
+export interface LoomSegmentRow {
+  id?: string
+  loom_id: string
+  segment_key: string
+  from_node_key: string
+  to_node_key: string
+  length_mm: number
+  routing: unknown
+  sleeving_id: string | null
+  ties: unknown
+  label: string | null
+  notes: string | null
 }
 
 export interface LoomWireRow {

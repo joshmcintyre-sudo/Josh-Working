@@ -18,6 +18,7 @@
  */
 
 import type { EdgeAnalysis, LoomAnalysis } from './analysis'
+import { pointAlong } from './segments'
 import type { Loom, LoomNode, NodeKind } from './types'
 
 export interface FormboardNode {
@@ -51,10 +52,33 @@ export interface FormboardRun {
   slack_mm: number
 }
 
+/**
+ * A length of bundle drawn as a single thick trunk, the way the harness is
+ * actually taped up. Wires inside it are listed rather than drawn separately.
+ */
+export interface FormboardTrunk {
+  segmentId: string
+  label: string
+  points: { x: number; y: number }[]
+  length_mm: number
+  /** Wires travelling inside. */
+  wireCount: number
+  /** Finished bundle diameter in mm, used to set the drawn line weight. */
+  bundleOd_mm: number
+  sleeving: string | null
+  sleevingUndersized: boolean
+  /** Board positions of tape wraps or ties. */
+  tiePoints: { x: number; y: number }[]
+}
+
 export interface FormboardLayout {
   board: { width_mm: number; height_mm: number }
   nodes: FormboardNode[]
   runs: FormboardRun[]
+  /** Bundles, drawn thick. Empty on a loom with no segments. */
+  trunks: FormboardTrunk[]
+  /** Runs that travel inside a trunk, so should not also be drawn loose. */
+  bundledEdgeIds: Set<string>
   branchPoints: FormboardNode[]
   /** Runs whose drawn path disagrees with the authored length by over 10 %. */
   lengthMismatches: { circuitId: string; cutLength_mm: number; drawnLength_mm: number }[]
@@ -124,11 +148,20 @@ export function buildFormboard(analysis: LoomAnalysis): FormboardLayout {
   const board = loom.formboard ?? DEFAULT_BOARD
   const positions = deriveFormboardPositions(loom)
 
-  const degree = new Map<string, number>()
-  for (const e of loom.edges) {
-    degree.set(e.fromNodeId, (degree.get(e.fromNodeId) ?? 0) + 1)
-    degree.set(e.toNodeId, (degree.get(e.toNodeId) ?? 0) + 1)
+  // Two things make a branch point on the board: the bundle physically
+  // splitting, and wires joining inside a splice. A lamp at the end of a run is
+  // neither, and neither is a lug that several wires happen to bolt onto.
+  const count = (items: { fromNodeId: string; toNodeId: string }[]) => {
+    const map = new Map<string, number>()
+    for (const i of items) {
+      map.set(i.fromNodeId, (map.get(i.fromNodeId) ?? 0) + 1)
+      map.set(i.toNodeId, (map.get(i.toNodeId) ?? 0) + 1)
+    }
+    return map
   }
+  const segmentDegree = count(loom.segments ?? [])
+  const wireDegree = count(loom.edges)
+  const degree = (loom.segments?.length ? segmentDegree : wireDegree)
 
   const nodes: FormboardNode[] = loom.nodes.map((n: LoomNode) => {
     const p = positions.get(n.id) ?? { x: MARGIN_MM, y: MARGIN_MM, derived: true }
@@ -142,9 +175,11 @@ export function buildFormboard(analysis: LoomAnalysis): FormboardLayout {
       y_mm: p.y,
       derived: p.derived,
       degree: d,
-      // Three or more runs meeting is where the loom physically splits, and it
-      // is what the builder needs marked on the board.
-      isBranchPoint: d >= 3,
+      isBranchPoint:
+        d >= 3 ||
+        // A splice with three or more wires joining in it is a branch even when
+        // the bundle runs straight through.
+        ((n.kind === 'splice' || n.kind === 'connector') && (wireDegree.get(n.id) ?? 0) >= 3),
     }
   })
   const byId = new Map(nodes.map((n) => [n.id, n]))
@@ -173,7 +208,34 @@ export function buildFormboard(analysis: LoomAnalysis): FormboardLayout {
     }
   })
 
+  const trunks: FormboardTrunk[] = analysis.segments.map((load) => {
+    const from = byId.get(load.segment.fromNodeId)
+    const to = byId.get(load.segment.toNodeId)
+    const ends =
+      from && to
+        ? [{ x: from.x_mm, y: from.y_mm }, { x: to.x_mm, y: to.y_mm }]
+        : [{ x: 0, y: 0 }, { x: 0, y: 0 }]
+    const points = load.segment.routing?.length
+      ? [ends[0]!, ...load.segment.routing, ends[1]!]
+      : ends
+    return {
+      segmentId: load.segment.id,
+      label: load.segment.label ?? load.segment.id,
+      points,
+      length_mm: load.segment.length_mm,
+      wireCount: load.edgeIds.length,
+      bundleOd_mm: load.bundleOd_mm,
+      sleeving: load.sleeving?.label ?? null,
+      sleevingUndersized: load.sleevingUndersized,
+      tiePoints: (load.segment.ties ?? []).map((f) => pointAlong(points, f)),
+    }
+  })
+
+  const bundledEdgeIds = new Set<string>()
+  for (const load of analysis.segments) for (const id of load.edgeIds) bundledEdgeIds.add(id)
+
   const lengthMismatches = runs
+    .filter((r) => !bundledEdgeIds.has(r.edgeId))
     .filter((r) => r.drawnLength_mm > 0 && Math.abs(r.slack_mm) / r.cutLength_mm > 0.1)
     .map((r) => ({
       circuitId: r.circuitId,
@@ -185,6 +247,8 @@ export function buildFormboard(analysis: LoomAnalysis): FormboardLayout {
     board,
     nodes,
     runs,
+    trunks,
+    bundledEdgeIds,
     branchPoints: nodes.filter((n) => n.isBranchPoint),
     lengthMismatches,
     fullyDerived: nodes.every((n) => n.derived),
