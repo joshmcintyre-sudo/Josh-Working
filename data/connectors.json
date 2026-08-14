@@ -1,0 +1,860 @@
+{
+  "meta": {
+    "title": "Automotive connector, terminal and termination data",
+    "revision": "2026-08-14",
+    "pnPolicy": {
+      "note": "Part numbers carry a confidence field. Nothing in this file is invented: where a manufacturer PN could not be stated with confidence it is null and the selection criteria (series, tang size, wire range, current rating) are given instead so the correct PN can be pulled from the supplier catalogue at BOM time. Always confirm against the current TE / Aptiv catalogue before releasing a build.",
+      "confidenceLevels": {
+        "high": "Long-standing published catalogue number, stable across revisions.",
+        "medium": "Catalogue number believed correct but with known variants (plating, keying, seal option) — confirm the suffix.",
+        "unspecified": "PN deliberately omitted; select from catalogue using the stated criteria."
+      }
+    },
+    "deratingRule": {
+      "note": "A connector's per-contact rating assumes only some contacts are loaded. When every contact in a housing carries current the contacts heat each other, and the derate grows with the number of ways. Interpolate on loaded-way count; the tabulated factors follow the shape of TE's published derating curves.",
+      "byLoadedWays": [
+        {
+          "ways": 1,
+          "factor": 1.0
+        },
+        {
+          "ways": 2,
+          "factor": 0.9
+        },
+        {
+          "ways": 4,
+          "factor": 0.8
+        },
+        {
+          "ways": 8,
+          "factor": 0.75
+        },
+        {
+          "ways": 12,
+          "factor": 0.7
+        },
+        {
+          "ways": 24,
+          "factor": 0.6
+        }
+      ],
+      "ambientAbove85cFactor": 0.8
+    }
+  },
+  "series": [
+    {
+      "id": "deutsch-dt",
+      "manufacturer": "TE Connectivity (Deutsch)",
+      "label": "Deutsch DT",
+      "contactSize": 16,
+      "currentRating_a": 13,
+      "wireRange_mm2": [
+        0.5,
+        2.1
+      ],
+      "wireRange_awg": [
+        20,
+        14
+      ],
+      "sealed": true,
+      "ipRating": "IP68 / IP6K9K",
+      "tempRange_c": [
+        -55,
+        125
+      ],
+      "matingCycles": 100,
+      "notes": "The default sealed connector for NZ-built vehicle looms. Field-serviceable with a HDT-48-00 hand crimper and a 0411-204-1605 removal tool. Wedgelock is mandatory — the connector is not retained without it.",
+      "housings": [
+        {
+          "ways": 2,
+          "receptaclePn": "DT04-2P",
+          "plugPn": "DT06-2S",
+          "receptacleWedgePn": "W2P",
+          "plugWedgePn": "W2S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 3,
+          "receptaclePn": "DT04-3P",
+          "plugPn": "DT06-3S",
+          "receptacleWedgePn": "W3P",
+          "plugWedgePn": "W3S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 4,
+          "receptaclePn": "DT04-4P",
+          "plugPn": "DT06-4S",
+          "receptacleWedgePn": "W4P",
+          "plugWedgePn": "W4S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 6,
+          "receptaclePn": "DT04-6P",
+          "plugPn": "DT06-6S",
+          "receptacleWedgePn": "W6P",
+          "plugWedgePn": "W6S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 8,
+          "receptaclePn": "DT04-8P",
+          "plugPn": "DT06-8S",
+          "receptacleWedgePn": "W8P",
+          "plugWedgePn": "W8S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 12,
+          "receptaclePn": "DT04-12PA",
+          "plugPn": "DT06-12SA",
+          "receptacleWedgePn": "W12P",
+          "plugWedgePn": "W12S",
+          "pnConfidence": "medium",
+          "note": "A/B/C keying variants exist — the A key is the common default. Match plug and receptacle keys."
+        }
+      ],
+      "contacts": [
+        {
+          "role": "pin",
+          "type": "solid barrel, machined",
+          "pn": "0460-202-16141",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            20,
+            16
+          ]
+        },
+        {
+          "role": "socket",
+          "type": "solid barrel, machined",
+          "pn": "0462-201-16141",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            20,
+            16
+          ]
+        },
+        {
+          "role": "pin",
+          "type": "stamped and formed",
+          "pn": "1060-16-0122",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            20,
+            14
+          ]
+        },
+        {
+          "role": "socket",
+          "type": "stamped and formed",
+          "pn": "1062-16-0122",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            20,
+            14
+          ]
+        }
+      ],
+      "accessories": [
+        {
+          "role": "cavity seal plug",
+          "pn": "0413-204-1605",
+          "pnConfidence": "high",
+          "note": "One per unused cavity. Omitting these voids the IP rating."
+        },
+        {
+          "role": "hand crimp tool",
+          "pn": "HDT-48-00",
+          "pnConfidence": "high",
+          "note": "For solid barrel contacts, 12-20 AWG."
+        },
+        {
+          "role": "contact removal tool",
+          "pn": "0411-204-1605",
+          "pnConfidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "deutsch-dtm",
+      "manufacturer": "TE Connectivity (Deutsch)",
+      "label": "Deutsch DTM",
+      "contactSize": 20,
+      "currentRating_a": 7.5,
+      "wireRange_mm2": [
+        0.35,
+        0.85
+      ],
+      "wireRange_awg": [
+        22,
+        18
+      ],
+      "sealed": true,
+      "ipRating": "IP68 / IP6K9K",
+      "tempRange_c": [
+        -55,
+        125
+      ],
+      "matingCycles": 100,
+      "notes": "Miniature version of DT. Use for sensors, switches and signal runs where DT is physically too bulky. Not for anything above 7.5 A.",
+      "housings": [
+        {
+          "ways": 2,
+          "receptaclePn": "DTM04-2P",
+          "plugPn": "DTM06-2S",
+          "receptacleWedgePn": "WM-2P",
+          "plugWedgePn": "WM-2S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 3,
+          "receptaclePn": "DTM04-3P",
+          "plugPn": "DTM06-3S",
+          "receptacleWedgePn": "WM-3P",
+          "plugWedgePn": "WM-3S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 4,
+          "receptaclePn": "DTM04-4P",
+          "plugPn": "DTM06-4S",
+          "receptacleWedgePn": "WM-4P",
+          "plugWedgePn": "WM-4S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 6,
+          "receptaclePn": "DTM04-6P",
+          "plugPn": "DTM06-6S",
+          "receptacleWedgePn": "WM-6P",
+          "plugWedgePn": "WM-6S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 8,
+          "receptaclePn": "DTM04-08PA",
+          "plugPn": "DTM06-08SA",
+          "receptacleWedgePn": "WM-8P",
+          "plugWedgePn": "WM-8S",
+          "pnConfidence": "medium",
+          "note": "Keying variants A/B — match both halves."
+        },
+        {
+          "ways": 12,
+          "receptaclePn": "DTM04-12PA",
+          "plugPn": "DTM06-12SA",
+          "receptacleWedgePn": "WM-12P",
+          "plugWedgePn": "WM-12S",
+          "pnConfidence": "medium",
+          "note": "Keying variants A/B — match both halves."
+        }
+      ],
+      "contacts": [
+        {
+          "role": "pin",
+          "type": "solid barrel, machined",
+          "pn": "0460-202-20141",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            22,
+            20
+          ]
+        },
+        {
+          "role": "socket",
+          "type": "solid barrel, machined",
+          "pn": "0462-201-20141",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            22,
+            20
+          ]
+        },
+        {
+          "role": "pin",
+          "type": "stamped and formed",
+          "pn": "1060-20-0122",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            22,
+            18
+          ]
+        },
+        {
+          "role": "socket",
+          "type": "stamped and formed",
+          "pn": "1062-20-0122",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            22,
+            18
+          ]
+        }
+      ],
+      "accessories": [
+        {
+          "role": "cavity seal plug",
+          "pn": "0413-204-2005",
+          "pnConfidence": "high"
+        },
+        {
+          "role": "hand crimp tool",
+          "pn": "HDT-48-00",
+          "pnConfidence": "high"
+        },
+        {
+          "role": "contact removal tool",
+          "pn": "0411-204-2005",
+          "pnConfidence": "medium"
+        }
+      ]
+    },
+    {
+      "id": "deutsch-dtp",
+      "manufacturer": "TE Connectivity (Deutsch)",
+      "label": "Deutsch DTP",
+      "contactSize": 12,
+      "currentRating_a": 25,
+      "wireRange_mm2": [
+        2.0,
+        5.3
+      ],
+      "wireRange_awg": [
+        14,
+        10
+      ],
+      "sealed": true,
+      "ipRating": "IP68 / IP6K9K",
+      "tempRange_c": [
+        -55,
+        125
+      ],
+      "matingCycles": 100,
+      "notes": "Heavy version of DT. The largest current a Deutsch connector will carry — above 25 A use a stud and ring terminals, not a connector.",
+      "housings": [
+        {
+          "ways": 2,
+          "receptaclePn": "DTP04-2P",
+          "plugPn": "DTP06-2S",
+          "receptacleWedgePn": "WP-2P",
+          "plugWedgePn": "WP-2S",
+          "pnConfidence": "high"
+        },
+        {
+          "ways": 4,
+          "receptaclePn": "DTP04-4P",
+          "plugPn": "DTP06-4S",
+          "receptacleWedgePn": "WP-4P",
+          "plugWedgePn": "WP-4S",
+          "pnConfidence": "high"
+        }
+      ],
+      "contacts": [
+        {
+          "role": "pin",
+          "type": "solid barrel, machined",
+          "pn": "0460-204-12141",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            14,
+            12
+          ]
+        },
+        {
+          "role": "socket",
+          "type": "solid barrel, machined",
+          "pn": "0462-203-12141",
+          "pnConfidence": "high",
+          "wireRange_awg": [
+            14,
+            12
+          ]
+        }
+      ],
+      "accessories": [
+        {
+          "role": "cavity seal plug",
+          "pn": "114017",
+          "pnConfidence": "medium"
+        },
+        {
+          "role": "hand crimp tool",
+          "pn": "HDT-48-00",
+          "pnConfidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "metripack-150",
+      "manufacturer": "Aptiv (Delphi)",
+      "label": "Metri-Pack 150 sealed",
+      "contactSize": null,
+      "tangWidth_mm": 1.5,
+      "currentRating_a": 14,
+      "wireRange_mm2": [
+        0.35,
+        0.8
+      ],
+      "wireRange_awg": [
+        22,
+        18
+      ],
+      "sealed": true,
+      "ipRating": "IP67",
+      "tempRange_c": [
+        -40,
+        125
+      ],
+      "matingCycles": 25,
+      "notes": "Very compact sealed series, widely used on OEM sensors. Requires a cable seal per cavity and a dedicated Aptiv crimp tool — harder to hand-build than Deutsch.",
+      "housings": [],
+      "contacts": [
+        {
+          "role": "female",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            22,
+            18
+          ],
+          "note": "Select the Metri-Pack 150 sealed female terminal matching wire OD and plating from the Aptiv catalogue."
+        },
+        {
+          "role": "male",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            22,
+            18
+          ]
+        }
+      ],
+      "accessories": [
+        {
+          "role": "cable seal",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "note": "Seal colour is matched to wire OD — specify wire insulation OD when ordering."
+        },
+        {
+          "role": "cavity plug",
+          "pn": null,
+          "pnConfidence": "unspecified"
+        }
+      ]
+    },
+    {
+      "id": "metripack-280",
+      "manufacturer": "Aptiv (Delphi)",
+      "label": "Metri-Pack 280 sealed",
+      "contactSize": null,
+      "tangWidth_mm": 2.8,
+      "currentRating_a": 30,
+      "wireRange_mm2": [
+        0.8,
+        3.0
+      ],
+      "wireRange_awg": [
+        18,
+        14
+      ],
+      "sealed": true,
+      "ipRating": "IP67",
+      "tempRange_c": [
+        -40,
+        125
+      ],
+      "matingCycles": 25,
+      "notes": "Common OEM mid-current series — relay boxes, injectors, actuators.",
+      "housings": [],
+      "contacts": [
+        {
+          "role": "female",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            18,
+            14
+          ]
+        },
+        {
+          "role": "male",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            18,
+            14
+          ]
+        }
+      ],
+      "accessories": [
+        {
+          "role": "cable seal",
+          "pn": null,
+          "pnConfidence": "unspecified"
+        },
+        {
+          "role": "cavity plug",
+          "pn": null,
+          "pnConfidence": "unspecified"
+        }
+      ]
+    },
+    {
+      "id": "metripack-480",
+      "manufacturer": "Aptiv (Delphi)",
+      "label": "Metri-Pack 480 sealed",
+      "contactSize": null,
+      "tangWidth_mm": 4.8,
+      "currentRating_a": 42,
+      "wireRange_mm2": [
+        2.0,
+        5.0
+      ],
+      "wireRange_awg": [
+        14,
+        10
+      ],
+      "sealed": true,
+      "ipRating": "IP67",
+      "tempRange_c": [
+        -40,
+        125
+      ],
+      "matingCycles": 25,
+      "notes": "High-current blade series. Practical ceiling for a plug-in connection on an accessory loom.",
+      "housings": [],
+      "contacts": [
+        {
+          "role": "female",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            14,
+            10
+          ]
+        },
+        {
+          "role": "male",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            14,
+            10
+          ]
+        }
+      ],
+      "accessories": [
+        {
+          "role": "cable seal",
+          "pn": null,
+          "pnConfidence": "unspecified"
+        }
+      ]
+    },
+    {
+      "id": "metripack-630",
+      "manufacturer": "Aptiv (Delphi)",
+      "label": "Metri-Pack 630 sealed",
+      "contactSize": null,
+      "tangWidth_mm": 6.3,
+      "currentRating_a": 46,
+      "wireRange_mm2": [
+        3.0,
+        8.0
+      ],
+      "wireRange_awg": [
+        12,
+        8
+      ],
+      "sealed": true,
+      "ipRating": "IP67",
+      "tempRange_c": [
+        -40,
+        125
+      ],
+      "matingCycles": 25,
+      "notes": "Largest Metri-Pack. Above this, terminate to studs.",
+      "housings": [],
+      "contacts": [
+        {
+          "role": "female",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            12,
+            8
+          ]
+        },
+        {
+          "role": "male",
+          "type": "sealed, tin",
+          "pn": null,
+          "pnConfidence": "unspecified",
+          "wireRange_awg": [
+            12,
+            8
+          ]
+        }
+      ],
+      "accessories": [
+        {
+          "role": "cable seal",
+          "pn": null,
+          "pnConfidence": "unspecified"
+        }
+      ]
+    }
+  ],
+  "ringTerminals": [
+    {
+      "id": "ring-m5-1.5",
+      "label": "Ring terminal M5, 0.5-1.5 mm²",
+      "stud": "M5",
+      "wireRange_mm2": [
+        0.5,
+        1.5
+      ],
+      "currentRating_a": 19,
+      "insulated": true,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "ring-m6-2.5",
+      "label": "Ring terminal M6, 1.5-2.5 mm²",
+      "stud": "M6",
+      "wireRange_mm2": [
+        1.5,
+        2.5
+      ],
+      "currentRating_a": 27,
+      "insulated": true,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "ring-m6-6",
+      "label": "Ring terminal M6, 4-6 mm²",
+      "stud": "M6",
+      "wireRange_mm2": [
+        4.0,
+        6.0
+      ],
+      "currentRating_a": 50,
+      "insulated": true,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "lug-m8-16",
+      "label": "Tinned copper lug M8, 16 mm²",
+      "stud": "M8",
+      "wireRange_mm2": [
+        16,
+        16
+      ],
+      "currentRating_a": 110,
+      "insulated": false,
+      "pn": null,
+      "pnConfidence": "unspecified",
+      "note": "Hydraulic crimp, then adhesive-lined heatshrink."
+    },
+    {
+      "id": "lug-m8-25",
+      "label": "Tinned copper lug M8, 25 mm²",
+      "stud": "M8",
+      "wireRange_mm2": [
+        25,
+        25
+      ],
+      "currentRating_a": 151,
+      "insulated": false,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "lug-m8-35",
+      "label": "Tinned copper lug M8, 35 mm²",
+      "stud": "M8",
+      "wireRange_mm2": [
+        35,
+        35
+      ],
+      "currentRating_a": 191,
+      "insulated": false,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "lug-m8-50",
+      "label": "Tinned copper lug M8, 50 mm²",
+      "stud": "M8",
+      "wireRange_mm2": [
+        50,
+        50
+      ],
+      "currentRating_a": 246,
+      "insulated": false,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "lug-m10-70",
+      "label": "Tinned copper lug M10, 70 mm²",
+      "stud": "M10",
+      "wireRange_mm2": [
+        70,
+        70
+      ],
+      "currentRating_a": 312,
+      "insulated": false,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    }
+  ],
+  "splices": [
+    {
+      "id": "splice-solder-0.5-1.5",
+      "label": "Solder-sleeve splice, 0.5-1.5 mm²",
+      "wireRange_mm2": [
+        0.5,
+        1.5
+      ],
+      "currentRating_a": 19,
+      "sealed": true,
+      "pn": null,
+      "pnConfidence": "unspecified",
+      "note": "Adhesive-lined, sealed. Preferred for signal branch points in a wet location."
+    },
+    {
+      "id": "splice-butt-1.5-2.5",
+      "label": "Heatshrink butt splice, 1.5-2.5 mm²",
+      "wireRange_mm2": [
+        1.5,
+        2.5
+      ],
+      "currentRating_a": 27,
+      "sealed": true,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "splice-butt-4-6",
+      "label": "Heatshrink butt splice, 4-6 mm²",
+      "wireRange_mm2": [
+        4.0,
+        6.0
+      ],
+      "currentRating_a": 50,
+      "sealed": true,
+      "pn": null,
+      "pnConfidence": "unspecified"
+    },
+    {
+      "id": "splice-ultrasonic",
+      "label": "Ultrasonic weld splice",
+      "wireRange_mm2": [
+        0.35,
+        6.0
+      ],
+      "currentRating_a": 50,
+      "sealed": false,
+      "pn": null,
+      "pnConfidence": "unspecified",
+      "note": "Production method for international manufacture. Not achievable in a hand-build — the NZ equivalent is a crimped and sealed splice."
+    },
+    {
+      "id": "busbar-stud",
+      "label": "Stud busbar splice point",
+      "wireRange_mm2": [
+        6.0,
+        95.0
+      ],
+      "currentRating_a": 400,
+      "sealed": false,
+      "pn": null,
+      "pnConfidence": "unspecified",
+      "note": "For high-current branch points. Must be enclosed and insulated."
+    }
+  ],
+  "protection": [
+    {
+      "id": "convoluted-7",
+      "label": "Convoluted tubing 7 mm ID, slit",
+      "bundleOd_mm": [
+        3,
+        6
+      ],
+      "tempRange_c": [
+        -40,
+        125
+      ]
+    },
+    {
+      "id": "convoluted-10",
+      "label": "Convoluted tubing 10 mm ID, slit",
+      "bundleOd_mm": [
+        6,
+        9
+      ]
+    },
+    {
+      "id": "convoluted-13",
+      "label": "Convoluted tubing 13 mm ID, slit",
+      "bundleOd_mm": [
+        9,
+        12
+      ]
+    },
+    {
+      "id": "convoluted-16",
+      "label": "Convoluted tubing 16 mm ID, slit",
+      "bundleOd_mm": [
+        12,
+        15
+      ]
+    },
+    {
+      "id": "convoluted-20",
+      "label": "Convoluted tubing 20 mm ID, slit",
+      "bundleOd_mm": [
+        15,
+        19
+      ]
+    },
+    {
+      "id": "convoluted-25",
+      "label": "Convoluted tubing 25 mm ID, slit",
+      "bundleOd_mm": [
+        19,
+        24
+      ]
+    },
+    {
+      "id": "braid-10",
+      "label": "Expandable braided sleeve 10 mm",
+      "bundleOd_mm": [
+        6,
+        14
+      ]
+    },
+    {
+      "id": "braid-20",
+      "label": "Expandable braided sleeve 20 mm",
+      "bundleOd_mm": [
+        12,
+        28
+      ]
+    }
+  ]
+}

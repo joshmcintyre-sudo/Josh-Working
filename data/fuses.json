@@ -1,0 +1,199 @@
+{
+  "meta": {
+    "title": "12 V DC fuse and circuit protection data",
+    "revision": "2026-08-14",
+    "standards": [
+      "SAE J1888 — High current blade fuses (MAXI)",
+      "SAE J2077 — Miniature blade fuses (MINI/APM)",
+      "ISO 8820-3 — Fuse-links, blade type",
+      "ISO 8820-5 — Fuse-links, high current (MIDI/MEGA)"
+    ],
+    "selectionRule": {
+      "description": "Standard automotive practice used by this tool.",
+      "steps": [
+        "1. Minimum fuse rating = 1.25 x continuous load current (headroom so the fuse does not fatigue and nuisance-blow at rated load).",
+        "2. Choose the smallest standard rating in the chosen family that is >= that minimum.",
+        "3. The chosen rating must be <= the derated ampacity of the wire it protects, otherwise the wire is the fuse. If no rating satisfies both, the wire must be upsized.",
+        "4. Fuse the conductor at the SOURCE end, as close to the battery/busbar as practical — the fuse protects the cable, not the device."
+      ],
+      "continuousDerateFactor": 1.25,
+      "inrushGuidance": "Blade fuses tolerate roughly 2x rated current for ~5 s and 10x for ~0.1 s. Motor and solenoid inrush of a few hundred milliseconds is normally absorbed. If inrush exceeds ~4x the fuse rating for longer than 100 ms, move to a slow-blow (MIDI) or a circuit breaker.",
+      "highCurrentThreshold_a": 60,
+      "highCurrentNote": "Above ~60 A continuous, blade fuses run hot and their holders are the weak point. Inverters, DC-DC chargers and winches should use bolt-down ANL, MIDI or MEGA fuses on a stud-mounted holder."
+    }
+  },
+  "families": [
+    {
+      "id": "mini",
+      "label": "MINI / APM blade",
+      "standard": "SAE J2077, ISO 8820-3",
+      "voltageRating_v": 32,
+      "interruptRating_a": 1000,
+      "maxContinuous_a": 30,
+      "slowBlow": false,
+      "boltDown": false,
+      "ratings_a": [2, 3, 4, 5, 7.5, 10, 15, 20, 25, 30],
+      "bodyColorByRating": {
+        "2": "grey", "3": "violet", "4": "pink", "5": "tan", "7.5": "brown",
+        "10": "red", "15": "blue", "20": "yellow", "25": "clear", "30": "green"
+      },
+      "notes": "Standard for modern fuse boxes. Preferred for anything under 30 A."
+    },
+    {
+      "id": "ato",
+      "label": "ATO / ATC regular blade",
+      "standard": "SAE J1284, ISO 8820-3",
+      "voltageRating_v": 32,
+      "interruptRating_a": 1000,
+      "maxContinuous_a": 40,
+      "slowBlow": false,
+      "boltDown": false,
+      "ratings_a": [1, 2, 3, 4, 5, 7.5, 10, 15, 20, 25, 30, 35, 40],
+      "bodyColorByRating": {
+        "1": "black", "2": "grey", "3": "violet", "4": "pink", "5": "tan", "7.5": "brown",
+        "10": "red", "15": "blue", "20": "yellow", "25": "clear", "30": "green",
+        "35": "blue-green", "40": "orange"
+      },
+      "notes": "Legacy but universally available in NZ. Good default for a hand-built loom."
+    },
+    {
+      "id": "maxi",
+      "label": "MAXI blade",
+      "standard": "SAE J1888, ISO 8820-3",
+      "voltageRating_v": 32,
+      "interruptRating_a": 1000,
+      "maxContinuous_a": 120,
+      "slowBlow": true,
+      "boltDown": false,
+      "ratings_a": [20, 25, 30, 40, 50, 60, 70, 80, 100, 120],
+      "bodyColorByRating": {
+        "20": "yellow", "30": "green", "40": "amber", "50": "red",
+        "60": "blue", "70": "brown", "80": "clear", "100": "purple", "120": "grey"
+      },
+      "notes": "Push-in high current. Convenient but the holder contact resistance is the limiting factor above ~80 A."
+    },
+    {
+      "id": "midi",
+      "label": "MIDI / AMI bolt-down",
+      "standard": "ISO 8820-5",
+      "voltageRating_v": 32,
+      "interruptRating_a": 2000,
+      "maxContinuous_a": 200,
+      "slowBlow": true,
+      "boltDown": true,
+      "boltCentres_mm": 30.2,
+      "boltSize": "M5",
+      "ratings_a": [30, 40, 50, 60, 70, 80, 100, 125, 150, 175, 200],
+      "notes": "Bolt-down, slow-blow. The right answer for 40-150 A DC-DC chargers and accessory feeds."
+    },
+    {
+      "id": "mega",
+      "label": "MEGA / AMG bolt-down",
+      "standard": "ISO 8820-5",
+      "voltageRating_v": 32,
+      "interruptRating_a": 2000,
+      "maxContinuous_a": 500,
+      "slowBlow": true,
+      "boltDown": true,
+      "boltCentres_mm": 50.8,
+      "boltSize": "M8",
+      "ratings_a": [40, 50, 60, 70, 80, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500],
+      "notes": "Main battery and alternator protection. Physically large — allow board space."
+    },
+    {
+      "id": "anl",
+      "label": "ANL bolt-down",
+      "standard": "Industry standard (no SAE/ISO equivalent)",
+      "voltageRating_v": 32,
+      "interruptRating_a": 6000,
+      "maxContinuous_a": 750,
+      "slowBlow": true,
+      "boltDown": true,
+      "boltCentres_mm": 84.0,
+      "boltSize": "M8",
+      "ratings_a": [35, 40, 50, 60, 70, 80, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 500, 600, 750],
+      "notes": "Highest interrupt rating of the bolt-down families. Standard for inverter feeds. Widely stocked in NZ."
+    },
+    {
+      "id": "breaker_type1",
+      "label": "Type I auto-reset circuit breaker",
+      "standard": "SAE J553",
+      "voltageRating_v": 32,
+      "interruptRating_a": 1000,
+      "maxContinuous_a": 60,
+      "slowBlow": true,
+      "boltDown": false,
+      "ratings_a": [10, 15, 20, 25, 30, 40, 50, 60],
+      "notes": "Cycles on and off while faulted. Use only where an intermittent load is safer than a dead one (wipers, blowers). Never for lighting."
+    },
+    {
+      "id": "breaker_type3",
+      "label": "Type III manual-reset circuit breaker",
+      "standard": "SAE J553",
+      "voltageRating_v": 32,
+      "interruptRating_a": 1000,
+      "maxContinuous_a": 150,
+      "slowBlow": true,
+      "boltDown": true,
+      "ratings_a": [30, 40, 50, 60, 70, 80, 100, 120, 135, 150],
+      "notes": "Manual reset button. Good for winches and service-access circuits."
+    }
+  ],
+  "holders": [
+    {
+      "id": "holder-anl-inline",
+      "family": "anl",
+      "label": "ANL inline holder, clear cover",
+      "partNumber": "generic-ANL-HOLDER",
+      "maxCable_mm2": 70,
+      "studSize": "M8",
+      "footprint_mm": { "length": 118, "width": 46, "height": 40 },
+      "mass_g": 180,
+      "notes": "Verify supplier PN — ANL holders are commodity items with no cross-manufacturer standard number."
+    },
+    {
+      "id": "holder-midi-stud",
+      "family": "midi",
+      "label": "MIDI stud-mount holder with cover",
+      "partNumber": "generic-MIDI-HOLDER",
+      "maxCable_mm2": 25,
+      "studSize": "M5",
+      "footprint_mm": { "length": 60, "width": 28, "height": 30 },
+      "mass_g": 55,
+      "notes": "Verify supplier PN."
+    },
+    {
+      "id": "holder-mega-stud",
+      "family": "mega",
+      "label": "MEGA stud-mount holder with cover",
+      "partNumber": "generic-MEGA-HOLDER",
+      "maxCable_mm2": 50,
+      "studSize": "M8",
+      "footprint_mm": { "length": 90, "width": 38, "height": 36 },
+      "mass_g": 120,
+      "notes": "Verify supplier PN."
+    },
+    {
+      "id": "holder-blade-6way",
+      "family": "ato",
+      "label": "6-way ATO/MINI fuse block with bus and cover",
+      "partNumber": "generic-FB6",
+      "maxCable_mm2": 4,
+      "feedStud": "M5",
+      "footprint_mm": { "length": 96, "width": 66, "height": 32 },
+      "mass_g": 110,
+      "notes": "Total block throughput typically limited to 100 A regardless of individual fuse ratings. Verify supplier PN."
+    },
+    {
+      "id": "holder-blade-12way",
+      "family": "ato",
+      "label": "12-way ATO/MINI fuse block with negative bus and cover",
+      "partNumber": "generic-FB12",
+      "maxCable_mm2": 4,
+      "feedStud": "M6",
+      "footprint_mm": { "length": 160, "width": 82, "height": 36 },
+      "mass_g": 240,
+      "notes": "Total block throughput typically limited to 100 A. Verify supplier PN."
+    }
+  ]
+}
