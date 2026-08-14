@@ -128,3 +128,22 @@ describe('CSV', () => {
     expect(toCsv([])).toBe('')
   })
 })
+
+describe('wire references', () => {
+  const rows = buildCutList(analysis)
+
+  it('uses the circuit id directly when the circuit is a single run', () => {
+    expect(rows.find((r) => r.circuitId === 'C-100')!.wireRef).toBe('C-100')
+  })
+
+  it('suffixes each run when a circuit is built from several wires', () => {
+    const c201 = rows.filter((r) => r.circuitId === 'C-201')
+    expect(c201.length).toBe(2)
+    expect(c201.map((r) => r.wireRef).sort()).toEqual(['C-201/1', 'C-201/2'])
+  })
+
+  it('gives every physical wire a unique label', () => {
+    const refs = rows.map((r) => r.wireRef)
+    expect(new Set(refs).size).toBe(refs.length)
+  })
+})

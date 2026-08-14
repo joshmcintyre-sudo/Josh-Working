@@ -315,6 +315,13 @@ function chooseSleeving(analysis: LoomAnalysis): BomLine | null {
 /* -------------------------------- cut list -------------------------------- */
 
 export interface CutListRow {
+  /**
+   * Unique label for this physical wire. Equal to the circuit id when the
+   * circuit is a single run, suffixed /1, /2 … when a circuit is built from
+   * several — otherwise two different wires go on the bench with the same
+   * label and the wrong one gets fitted.
+   */
+  wireRef: string
   circuitId: string
   edgeId: string
   from: string
@@ -335,9 +342,21 @@ export interface CutListRow {
 
 export function buildCutList(analysis: LoomAnalysis): CutListRow[] {
   const defaultInsulation = analysis.loom.settings.defaultInsulationId
+  const perCircuit = new Map<string, number>()
+  for (const e of analysis.edges) {
+    perCircuit.set(e.edge.circuitId, (perCircuit.get(e.edge.circuitId) ?? 0) + 1)
+  }
+  const seen = new Map<string, number>()
   return [...analysis.edges]
     .sort((a, b) => a.edge.circuitId.localeCompare(b.edge.circuitId, undefined, { numeric: true }))
-    .map((e: EdgeAnalysis) => ({
+    .map((e: EdgeAnalysis) => {
+      const n = (seen.get(e.edge.circuitId) ?? 0) + 1
+      seen.set(e.edge.circuitId, n)
+      return {
+      wireRef:
+        (perCircuit.get(e.edge.circuitId) ?? 1) > 1
+          ? `${e.edge.circuitId}/${n}`
+          : e.edge.circuitId,
       circuitId: e.edge.circuitId,
       edgeId: e.edge.id,
       from: e.fromNode.name,
@@ -356,7 +375,8 @@ export function buildCutList(analysis: LoomAnalysis): CutListRow[] {
       limitingConstraint: e.sizing.limitingConstraint,
       fuse: e.fuse?.selected ? `${e.fuse.selected.rating_a} A ${e.fuse.selected.familyLabel}` : '',
       notes: e.edge.notes ?? '',
-    }))
+      }
+    })
 }
 
 /** RFC 4180 CSV. Quotes everything so a comma in a location never splits a cell. */

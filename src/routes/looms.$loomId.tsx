@@ -1,11 +1,13 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
+import { FormboardView } from '~/components/formboard-view'
 import { Inspector } from '~/components/inspector'
 import { LoadPalette } from '~/components/load-palette'
 import { SchematicCanvas, type Selection } from '~/components/schematic-canvas'
 import { SummaryPanel } from '~/components/summary-panel'
 import { Badge, Button, Panel, Select } from '~/components/ui'
 import { nextCircuitId, nextId, useLoom } from '~/hooks/use-loom'
+import { downloadBom, downloadCutList, downloadDrawing } from '~/lib/export/download'
 import type { AmpacityBasis, LoomEdge, LoomNode, NodeKind, WireFamily } from '~/lib/loom/types'
 
 export const Route = createFileRoute('/looms/$loomId')({ component: Editor })
@@ -14,6 +16,7 @@ function Editor() {
   const { loomId } = Route.useParams()
   const ctx = useLoom(loomId)
   const [selection, setSelection] = useState<Selection>(null)
+  const [view, setView] = useState<'schematic' | 'formboard'>('schematic')
 
   if (ctx.loading) return <Shell><p className="p-8 text-sm text-neutral-600">Loading…</p></Shell>
   if (ctx.loadError || !ctx.loom || !ctx.analysis) {
@@ -105,6 +108,33 @@ function Editor() {
         <Button size="sm" variant="ghost" onClick={ctx.redo} disabled={!ctx.canRedo}>
           Redo
         </Button>
+
+        <div className="ml-1 flex overflow-hidden rounded-md border border-neutral-700">
+          {(['schematic', 'formboard'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={
+                'h-7 px-3 text-xs font-medium transition-colors ' +
+                (view === v
+                  ? 'bg-neutral-700 text-neutral-100'
+                  : 'bg-neutral-900 text-neutral-400 hover:text-neutral-200')
+              }
+            >
+              {v === 'schematic' ? 'Schematic' : 'Formboard'}
+            </button>
+          ))}
+        </div>
+
+        <Button size="sm" onClick={() => downloadDrawing(analysis)}>
+          Drawing PDF
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => downloadCutList(analysis)}>
+          Cut list
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => downloadBom(analysis)}>
+          BOM
+        </Button>
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -156,14 +186,23 @@ function Editor() {
         </aside>
 
         <main className="min-w-0 flex-1">
-          <SchematicCanvas
-            loom={loom}
-            analysis={analysis}
-            selection={selection}
-            onSelect={setSelection}
-            onMoveNode={(id, position) => ctx.patchNode(id, { position })}
-            onConnect={connect}
-          />
+          {view === 'schematic' ? (
+            <SchematicCanvas
+              loom={loom}
+              analysis={analysis}
+              selection={selection}
+              onSelect={setSelection}
+              onMoveNode={(id, position) => ctx.patchNode(id, { position })}
+              onConnect={connect}
+            />
+          ) : (
+            <FormboardView
+              analysis={analysis}
+              selection={selection}
+              onSelect={setSelection}
+              onMoveNode={(id, formboardPosition) => ctx.patchNode(id, { formboardPosition })}
+            />
+          )}
         </main>
 
         <aside className="flex w-80 shrink-0 flex-col border-l border-neutral-800">
