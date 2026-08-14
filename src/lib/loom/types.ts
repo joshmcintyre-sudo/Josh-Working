@@ -164,7 +164,7 @@ export interface Loom {
 
 export const DEFAULT_SETTINGS: LoomSettings = {
   systemVoltage_v: 12,
-  ampacityBasis: 'sae_j1128',
+  ampacityBasis: 'as_nzs_3808',
   defaultFamily: 'awg',
   defaultAmbient_c: 30,
   defaultInsulationId: 'gxl',

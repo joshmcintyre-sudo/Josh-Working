@@ -21,7 +21,7 @@ export const DEMO_LOOM: Loom = {
   revision: 'A',
   settings: {
     systemVoltage_v: 12,
-    ampacityBasis: 'sae_j1128',
+    ampacityBasis: 'as_nzs_3808',
     defaultFamily: 'awg',
     defaultAmbient_c: 30,
     defaultInsulationId: 'gxl',
@@ -216,7 +216,7 @@ export const DEMO_LOOM: Loom = {
       insulationId: 'battery_pvc',
       // Matched to the positive feed. Shop convention: negative is cut from the
       // same reel as the positive on any run this size.
-      gaugeOverrideId: 'awg-1-0',
+      gaugeOverrideId: 'awg-3-0',
     },
 
     /* ---- distribution ---- */
@@ -252,7 +252,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 800,
       class: 'ground',
       returnPath: 'modeled',
-      gaugeOverrideId: 'awg-8',
+      gaugeOverrideId: 'awg-6',
     },
     {
       id: 'e-bus-dcdc25',
@@ -274,7 +274,7 @@ export const DEMO_LOOM: Loom = {
       length_mm: 900,
       class: 'ground',
       returnPath: 'modeled',
-      gaugeOverrideId: 'awg-8',
+      gaugeOverrideId: 'awg-10',
     },
     {
       id: 'e-bus-fb',

@@ -276,9 +276,12 @@ describe('the demo loom', () => {
     expect(errs.map((e) => `${e.edgeId ?? e.nodeId ?? '-'}: ${e.message}`)).toEqual([])
   })
 
-  it('sizes the inverter feed at 1/0 with a 225 A ANL', () => {
+  it('sizes the inverter feed at 3/0 with a 225 A ANL on the AS/NZS basis', () => {
+    // The conservative NZ basis rates 1/0 at 174 A, so a 225 A fuse does not
+    // fit under it and the conductor goes to 3/0. On the SAE basis this run
+    // lands on 1/0 — the choice of basis is a real design decision.
     const inv = a.byEdgeId['e-inv-feed']!
-    expect(inv.sizing.size?.id).toBe('awg-1-0')
+    expect(inv.sizing.size?.id).toBe('awg-3-0')
     expect(inv.sizing.limitingConstraint).toBe('fusibility')
     expect(inv.fuse?.selected?.rating_a).toBe(225)
     expect(inv.fuse?.selected?.boltDown).toBe(true)

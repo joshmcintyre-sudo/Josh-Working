@@ -294,9 +294,12 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
       })
     }
     for (const w of sizing.warnings) {
+      // Provenance, not a defect: the ampacity came from the fitted curve rather
+      // than a published row. It belongs on the drawing, not in the defect list.
+      const interpolated = w.includes('interpolated')
       issues.push({
-        code: w.includes('interpolated') ? 'interpolated_data' : 'over_ampacity',
-        severity: 'warning',
+        code: interpolated ? 'interpolated_data' : 'over_ampacity',
+        severity: interpolated ? 'info' : 'warning',
         edgeId: edge.id,
         message: `${edge.circuitId}: ${w}`,
       })
