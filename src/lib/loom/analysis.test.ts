@@ -458,3 +458,44 @@ describe('cumulative voltage drop along a circuit', () => {
     expect(() => analyseLoom(loom)).not.toThrow()
   })
 })
+
+describe('termination (flush-cut) nodes', () => {
+  it('counts toward total loom current the same as a load', () => {
+    const loom = miniLoom({ load: { continuousCurrent_a: 10 }, sourceCapacity_a: 12 })
+    loom.nodes.find((n) => n.id === 'load')!.kind = 'termination'
+    const a = analyseLoom(loom)
+    // 10 A of 12 A capacity is over 80 %, same threshold a load node trips.
+    expect(a.issues.some((i) => i.code === 'source_near_capacity')).toBe(true)
+  })
+
+  it('is a valid source-to-load path terminal for the cumulative drop budget', () => {
+    const loom = miniLoom({ load: { continuousCurrent_a: 10 } })
+    loom.nodes.find((n) => n.id === 'load')!.kind = 'termination'
+    loom.nodes.push({
+      id: 'mid',
+      kind: 'splice',
+      name: 'Mid',
+      location: 'x',
+      position: { x: 1, y: 1 },
+      splice: { method: 'crimp' },
+    })
+    loom.edges[0]!.toNodeId = 'mid'
+    loom.edges[0]!.length_mm = 2800
+    loom.edges[0]!.gaugeOverrideId = 'awg-14'
+    loom.edges.push({
+      id: 'feed2',
+      fromNodeId: 'mid',
+      toNodeId: 'load',
+      circuitId: 'C-1',
+      length_mm: 2800,
+      class: 'power',
+      returnPath: 'modeled',
+      gaugeOverrideId: 'awg-14',
+    })
+    const a = analyseLoom(loom)
+    for (const e of a.edges.filter((x) => x.edge.circuitId === 'C-1')) {
+      expect(e.sizing.voltageDropPct).toBeLessThanOrEqual(e.sizing.dropLimitPct)
+    }
+    expect(a.issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(true)
+  })
+})

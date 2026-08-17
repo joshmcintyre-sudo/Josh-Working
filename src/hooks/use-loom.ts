@@ -12,6 +12,7 @@ import { getRepository } from '~/lib/db'
 import { analyseLoom, type LoomAnalysis } from '~/lib/loom/analysis'
 import {
   addSegment,
+  duplicateBranch,
   duplicateEdge,
   duplicateNode,
   insertSpliceInRun,
@@ -236,6 +237,10 @@ export function useLoom(loomId: string) {
         dispatch({ type: 'replace', loom: mutate((l) => duplicateNode(l, nodeId).loom) }),
       duplicateRun: (edgeId: string) =>
         dispatch({ type: 'replace', loom: mutate((l) => duplicateEdge(l, edgeId).loom) }),
+      duplicateBranch: (
+        rootNodeId: string,
+        target: { segmentId: string; distance_mm: number } | { nodeId: string },
+      ) => dispatch({ type: 'replace', loom: mutate((l) => duplicateBranch(l, rootNodeId, target).loom) }),
       connectBundle: (fromNodeId: string, toNodeId: string, length_mm: number) =>
         dispatch({
           type: 'replace',

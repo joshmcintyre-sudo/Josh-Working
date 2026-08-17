@@ -137,6 +137,7 @@ export function DistancePrompt({
   body,
   max,
   defaultValue,
+  confirmLabel = 'Insert splice',
   onConfirm,
   onCancel,
 }: {
@@ -144,6 +145,7 @@ export function DistancePrompt({
   body: ReactNode
   max: number
   defaultValue: number
+  confirmLabel?: string
   onConfirm: (value: number) => void
   onCancel: () => void
 }) {
@@ -182,7 +184,7 @@ export function DistancePrompt({
             Cancel
           </Button>
           <Button size="sm" variant="primary" onClick={submit}>
-            Insert splice
+            {confirmLabel}
           </Button>
         </div>
       </div>

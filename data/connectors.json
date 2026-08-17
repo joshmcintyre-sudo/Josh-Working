@@ -855,6 +855,30 @@
         12,
         28
       ]
+    },
+    {
+      "id": "tape-pvc-19",
+      "label": "PVC harness tape 19 mm, half-lapped wrap",
+      "bundleOd_mm": [
+        3,
+        40
+      ],
+      "tempRange_c": [
+        -20,
+        105
+      ]
+    },
+    {
+      "id": "tape-cloth-19",
+      "label": "Cloth (friction) tape 19 mm, half-lapped wrap",
+      "bundleOd_mm": [
+        3,
+        40
+      ],
+      "tempRange_c": [
+        -40,
+        120
+      ]
     }
   ]
 }

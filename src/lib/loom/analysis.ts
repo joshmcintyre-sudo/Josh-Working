@@ -433,7 +433,9 @@ export function analyseLoom(loom: Loom): LoomAnalysis {
 
   /* ---------------------------- whole-loom checks --------------------------- */
 
-  const loadNodes = loom.nodes.filter((n) => n.kind === 'load')
+  // A termination (bare, flush-cut end) sinks current the same way a load
+  // does — it just has no connector, splice or lug fitted at the end of it.
+  const loadNodes = loom.nodes.filter((n) => n.kind === 'load' || n.kind === 'termination')
   const continuousLoad_a = loadNodes.reduce((a, n) => a + nodeLoadCurrent(n), 0)
   const peakInrush_a = loadNodes.reduce((a, n) => a + nodeInrush(n), 0)
   const sourceCapacity_a = sources.reduce((a, n) => a + (n.source?.capacity_a ?? 0), 0)
@@ -804,7 +806,7 @@ function overBudgetPaths(
     while (stack.length) {
       const step = stack.pop()!
       const node = nodes.get(step.nodeId)
-      if (node?.kind === 'load' && step.path.length > 1) {
+      if ((node?.kind === 'load' || node?.kind === 'termination') && step.path.length > 1) {
         for (const run of step.path) {
           run.pathRuns = Math.max(run.pathRuns ?? 0, step.path.length)
         }

@@ -397,6 +397,10 @@ export function buildCutList(analysis: LoomAnalysis): CutListRow[] {
   return [...analysis.edges]
     .sort((a, b) => a.edge.circuitId.localeCompare(b.edge.circuitId, undefined, { numeric: true }))
     .map((e: EdgeAnalysis) => {
+      const flushCutNotes = [
+        e.fromNode.kind === 'termination' ? `${e.fromNode.name}: flush cut, no connector` : null,
+        e.toNode.kind === 'termination' ? `${e.toNode.name}: flush cut, no connector` : null,
+      ].filter((n): n is string => n !== null)
       return {
       wireRef: refs.get(e.edge.id) ?? e.edge.circuitId,
       circuitId: e.edge.circuitId,
@@ -418,7 +422,7 @@ export function buildCutList(analysis: LoomAnalysis): CutListRow[] {
       voltageDropPct: Number(e.sizing.voltageDropPct.toFixed(2)),
       limitingConstraint: e.sizing.limitingConstraint,
       fuse: e.fuse?.selected ? `${e.fuse.selected.rating_a} A ${e.fuse.selected.familyLabel}` : '',
-      notes: e.edge.notes ?? '',
+      notes: [e.edge.notes, ...flushCutNotes].filter(Boolean).join(' — '),
       }
     })
 }

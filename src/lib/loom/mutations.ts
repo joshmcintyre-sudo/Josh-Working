@@ -370,6 +370,220 @@ export function duplicateEdge(loom: Loom, edgeId: string): { loom: Loom; edgeId:
   return { loom: { ...loom, edges: [...loom.edges, copy] }, edgeId: newId }
 }
 
+export interface DuplicateBranchResult {
+  loom: Loom
+  /** Copy of `rootNodeId` — the device, or its connector, that was duplicated. */
+  rootNodeId: string
+  nodeIds: string[]
+  edgeIds: string[]
+  segmentIds: string[]
+  /** Where the duplicate attaches to the rest of the loom. */
+  branchNodeId: string
+}
+
+/**
+ * Copy a whole device branch — everything hanging off `rootNodeId` away from
+ * the rest of the loom, its connector included — and reattach the copy at a
+ * new point on an existing trunk, or an existing splice/connector already
+ * there.
+ *
+ * This is the one-shot version of "wire up another one of these, off the
+ * bundle at 750mm": most looms here are duplicated from an existing hand-built
+ * one, not drawn from scratch, so copying a device node in isolation and
+ * rewiring it by hand is the wrong grain. Pick the device, or the connector it
+ * plugs into, as `rootNodeId` — everything beyond it comes with it.
+ *
+ * Runs that connect the root back to the rest of the loom are not copied —
+ * they are rebuilt from the new attachment point instead, at the same length
+ * and protection and on the same circuit id, so the duplicate reads as
+ * another run of the same circuit off the same splice, the way the user's own
+ * "splice feeds strobe #2" example works, rather than a new circuit that
+ * happens to look the same.
+ */
+export function duplicateBranch(
+  loom: Loom,
+  rootNodeId: string,
+  target: { segmentId: string; distance_mm: number } | { nodeId: string },
+  offset = { x: 40, y: 40 },
+): DuplicateBranchResult {
+  const root = loom.nodes.find((n) => n.id === rootNodeId)
+  if (!root) throw new Error(`No node with id "${rootNodeId}".`)
+
+  // A run touching root is "upstream" — part of the rest of the loom, not the
+  // branch — if current flows into root on it (power arriving) or out of root
+  // on it (a ground return leaving, which accumulates back toward source).
+  const touching = loom.edges.filter((e) => e.fromNodeId === rootNodeId || e.toNodeId === rootNodeId)
+  const upstream = touching.filter((e) =>
+    e.class === 'ground' ? e.fromNodeId === rootNodeId : e.toNodeId === rootNodeId,
+  )
+  if (upstream.length === 0) {
+    throw new Error(`"${root.name}" has no run connecting it to the rest of the loom to duplicate from.`)
+  }
+  const upstreamIds = new Set(upstream.map((e) => e.id))
+
+  // Everything reachable from root without crossing an upstream run is the
+  // branch: root itself, its device(s), and every run between them.
+  const subtreeNodeIds = new Set<string>([rootNodeId])
+  const subtreeEdgeIds = new Set<string>()
+  const queue = [rootNodeId]
+  while (queue.length) {
+    const id = queue.shift()!
+    for (const e of loom.edges) {
+      if (upstreamIds.has(e.id) || subtreeEdgeIds.has(e.id)) continue
+      if (e.fromNodeId !== id && e.toNodeId !== id) continue
+      subtreeEdgeIds.add(e.id)
+      const other = e.fromNodeId === id ? e.toNodeId : e.fromNodeId
+      if (!subtreeNodeIds.has(other)) {
+        subtreeNodeIds.add(other)
+        queue.push(other)
+      }
+    }
+  }
+  const subtreeEdges = loom.edges.filter((e) => subtreeEdgeIds.has(e.id))
+
+  const segments = loom.segments ?? []
+  const internalSegments = segments.filter(
+    (s) => subtreeNodeIds.has(s.fromNodeId) && subtreeNodeIds.has(s.toNodeId),
+  )
+  const connectingSegments = segments.filter(
+    (s) => subtreeNodeIds.has(s.fromNodeId) !== subtreeNodeIds.has(s.toNodeId),
+  )
+
+  /* ---- clone the branch's own nodes ---- */
+
+  const takenNodeIds = new Set(loom.nodes.map((n) => n.id))
+  const takenNames = loom.nodes.map((n) => n.name)
+  const idMap = new Map<string, string>()
+  const clonedNodes: LoomNode[] = []
+  for (const nodeId of subtreeNodeIds) {
+    const original = loom.nodes.find((n) => n.id === nodeId)!
+    const newId = freeId(original.kind, takenNodeIds)
+    takenNodeIds.add(newId)
+    idMap.set(nodeId, newId)
+    const name = nextCopyName(original.name, takenNames)
+    takenNames.push(name)
+    clonedNodes.push(
+      structuredClone({
+        ...original,
+        id: newId,
+        name,
+        position: { x: original.position.x + offset.x, y: original.position.y + offset.y },
+        formboardPosition: original.formboardPosition
+          ? { x: original.formboardPosition.x + 120, y: original.formboardPosition.y + 120 }
+          : undefined,
+      }),
+    )
+  }
+
+  /* ---- clone the branch's own segments ---- */
+
+  const takenSegIds = new Set(segments.map((s) => s.id))
+  const clonedInternalSegments: LoomSegment[] = internalSegments.map((s) => {
+    const newId = freeId('seg', takenSegIds)
+    takenSegIds.add(newId)
+    return {
+      ...structuredClone(s),
+      id: newId,
+      fromNodeId: idMap.get(s.fromNodeId)!,
+      toNodeId: idMap.get(s.toNodeId)!,
+    }
+  })
+
+  let working: Loom = {
+    ...loom,
+    nodes: [...loom.nodes, ...clonedNodes],
+    segments: [...segments, ...clonedInternalSegments],
+  }
+
+  /* ---- the attachment point: an existing node, or a fresh breakout ---- */
+
+  let branchNodeId: string
+  if ('nodeId' in target) {
+    branchNodeId = target.nodeId
+  } else {
+    const split = splitSegment(working, target.segmentId, target.distance_mm, { kind: 'splice' })
+    working = split.loom
+    branchNodeId = split.nodeId
+  }
+
+  /* ---- new segments carrying the branch's own pigtail from that point ---- */
+
+  const takenSegIdsForNew = new Set((working.segments ?? []).map((s) => s.id))
+  const nextSegId = () => {
+    const id = freeId('seg', takenSegIdsForNew)
+    takenSegIdsForNew.add(id)
+    return id
+  }
+  const newSegments: LoomSegment[] = connectingSegments.map((s) => {
+    const rootSideOld = subtreeNodeIds.has(s.fromNodeId) ? s.fromNodeId : s.toNodeId
+    return {
+      ...structuredClone(s),
+      id: nextSegId(),
+      fromNodeId: branchNodeId,
+      toNodeId: idMap.get(rootSideOld)!,
+    }
+  })
+  working = { ...working, segments: [...(working.segments ?? []), ...newSegments] }
+
+  /* ---- clone the branch's own wires, and rebuild the runs that fed it ---- */
+
+  const takenEdgeIds = new Set(working.edges.map((e) => e.id))
+  const nextEdgeId = () => {
+    const id = freeId('run', takenEdgeIds)
+    takenEdgeIds.add(id)
+    return id
+  }
+  const nodeById = new Map(loom.nodes.map((n) => [n.id, n]))
+
+  const clonedEdges: LoomEdge[] = subtreeEdges.map((e) => ({
+    ...structuredClone(e),
+    id: nextEdgeId(),
+    fromNodeId: idMap.get(e.fromNodeId)!,
+    toNodeId: idMap.get(e.toNodeId)!,
+    segmentIds: undefined,
+    routing: undefined,
+  }))
+
+  // Ground is usually a shared bus reached independently of wherever the power
+  // trunk is spliced — a light bar and a strobe on the same fuse block splice
+  // still return to the one chassis stud, not to each other. So only power
+  // (or signal/charging/starter) upstream runs are rebuilt at the new
+  // attachment point; a ground upstream run is rebuilt to the exact same far
+  // node as the original, same as duplicating that one run on its own would.
+  const newUpstreamEdges: LoomEdge[] = upstream.map((e) => {
+    const rootSideOld = subtreeNodeIds.has(e.fromNodeId) ? e.fromNodeId : e.toNodeId
+    const farNodeId = e.fromNodeId === rootSideOld ? e.toNodeId : e.fromNodeId
+    const farNode = nodeById.get(farNodeId)
+    const ground = e.class === 'ground'
+    // A run fed straight off a source node with no protection of its own
+    // inherits the source's — carry that forward explicitly, since a power
+    // run's new "from" end is the splice, not the source, and would otherwise
+    // silently lose it.
+    const inheritedProtection =
+      !ground && (e.protection ?? (farNode?.kind === 'source' ? farNode.protection : undefined))
+    return {
+      ...structuredClone(e),
+      id: nextEdgeId(),
+      fromNodeId: ground ? idMap.get(rootSideOld)! : branchNodeId,
+      toNodeId: ground ? farNodeId : idMap.get(rootSideOld)!,
+      protection: inheritedProtection || undefined,
+      segmentIds: undefined,
+      routing: undefined,
+    }
+  })
+
+  working = { ...working, edges: [...working.edges, ...clonedEdges, ...newUpstreamEdges] }
+
+  return {
+    loom: working,
+    rootNodeId: idMap.get(rootNodeId)!,
+    nodeIds: clonedNodes.map((n) => n.id),
+    edgeIds: [...clonedEdges, ...newUpstreamEdges].map((e) => e.id),
+    segmentIds: [...clonedInternalSegments, ...newSegments].map((s) => s.id),
+    branchNodeId,
+  }
+}
+
 /* -------------------------------- deletion -------------------------------- */
 
 export interface DeletionImpact {
@@ -446,7 +660,13 @@ export function inferWireClass(loom: Loom, fromNodeId: string, toNodeId: string)
     }
   }
   const from = loom.nodes.find((n) => n.id === fromNodeId)
-  if (from?.kind === 'load' && to.kind !== 'load') return 'ground'
+  if (
+    (from?.kind === 'load' || from?.kind === 'termination') &&
+    to.kind !== 'load' &&
+    to.kind !== 'termination'
+  ) {
+    return 'ground'
+  }
   return 'power'
 }
 

@@ -3,6 +3,7 @@ import { analyseLoom } from './analysis'
 import { DEMO_LOOM } from './demo-loom'
 import {
   addSegment,
+  duplicateBranch,
   duplicateEdge,
   duplicateNode,
   inferWireClass,
@@ -224,6 +225,76 @@ describe('duplicating', () => {
     const { loom, nodeId } = duplicateNode(DEMO_LOOM, 'lightbar')
     loom.nodes.find((n) => n.id === nodeId)!.load!.continuousCurrent_a = 99
     expect(DEMO_LOOM.nodes.find((n) => n.id === 'lightbar')!.load!.continuousCurrent_a).toBe(10)
+  })
+})
+
+describe('duplicating a whole branch', () => {
+  // The strobe hangs off the roof trunk through its own Deutsch DTM connector:
+  // fuseblock -> [dtm2_strobe] -> strobe, and back dtm2_strobe -> gnd_cab.
+  // Root = dtm2_strobe. Upstream = e-fb-strobe (power in) and e-dtmcon-gnd
+  // (ground out). Branch = dtm2_strobe + strobe, joined by e-dtm-strobe and
+  // e-strobe-gnd, bundled together by seg-st-load.
+  it('copies the connector and the device beyond it, not the rest of the loom', () => {
+    const r = duplicateBranch(DEMO_LOOM, 'dtm2_strobe', { nodeId: 'roof_breakout' })
+    expect(r.nodeIds.length).toBe(2)
+    const clones = r.loom.nodes.filter((n) => r.nodeIds.includes(n.id))
+    expect(clones.map((n) => n.kind).sort()).toEqual(['connector', 'load'])
+    expect(clones.find((n) => n.kind === 'load')!.name).toBe('Amber strobe beacon 2')
+    // Nothing outside the branch was touched.
+    expect(r.loom.nodes.length).toBe(DEMO_LOOM.nodes.length + 2)
+  })
+
+  it('rebuilds the feed and return at the chosen attachment point, same circuit, same length', () => {
+    const r = duplicateBranch(DEMO_LOOM, 'dtm2_strobe', { nodeId: 'roof_breakout' })
+    const newEdges = r.loom.edges.filter((e) => r.edgeIds.includes(e.id))
+    expect(newEdges.length).toBe(4) // feed-in, ground-out, + the 2 branch-internal runs
+
+    const feed = newEdges.find((e) => e.fromNodeId === 'roof_breakout')!
+    expect(feed.circuitId).toBe('C-202')
+    expect(feed.length_mm).toBe(2600) // same as the original e-fb-strobe
+    expect(feed.protection).toEqual({ familyId: 'ato' }) // carried over, not lost
+
+    // Ground is a shared bus, not the trunk being spliced — the new return
+    // goes straight to the same chassis point the original used.
+    const ret = newEdges.find((e) => e.toNodeId === 'gnd_cab')!
+    expect(ret.circuitId).toBe('C-202G')
+    expect(ret.length_mm).toBe(2800) // same as the original e-dtmcon-gnd
+  })
+
+  it('does not double the original current draw — each copy sizes on its own', () => {
+    const r = duplicateBranch(DEMO_LOOM, 'dtm2_strobe', { nodeId: 'roof_breakout' })
+    const a = analyseLoom(r.loom)
+    const clonedFeed = a.edges.find((e) => r.edgeIds.includes(e.edge.id) && e.edge.class === 'power')!
+    expect(clonedFeed.current_a).toBe(1) // the strobe's own 1 A, not 2
+    expect(a.errorCount).toBe(0)
+  })
+
+  it('can attach via a fresh breakout split from a trunk segment, at the chosen distance', () => {
+    const r = duplicateBranch(DEMO_LOOM, 'dtm2_strobe', { segmentId: 'seg-cab-roof', distance_mm: 400 })
+    const branch = r.loom.nodes.find((n) => n.id === r.branchNodeId)!
+    expect(branch.kind).toBe('splice')
+    const original = DEMO_LOOM.segments!.find((s) => s.id === 'seg-cab-roof')!
+    const halves = r.loom.segments!.filter(
+      (s) => s.fromNodeId === original.fromNodeId || s.toNodeId === original.toNodeId,
+    )
+    expect(halves.some((s) => s.length_mm === 400)).toBe(true)
+  })
+
+  it('refuses to duplicate a node with nothing connecting it to the rest of the loom', () => {
+    const loom: Loom = {
+      ...DEMO_LOOM,
+      nodes: [
+        ...DEMO_LOOM.nodes,
+        {
+          id: 'floating',
+          kind: 'load',
+          name: 'Floating',
+          location: 'x',
+          position: { x: 0, y: 0 },
+        },
+      ],
+    }
+    expect(() => duplicateBranch(loom, 'floating', { nodeId: 'roof_breakout' })).toThrow()
   })
 })
 

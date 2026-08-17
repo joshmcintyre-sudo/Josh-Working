@@ -31,7 +31,7 @@ import { amps, cn, mm, pct } from '~/lib/utils'
 import type { Selection } from './schematic-canvas'
 import { Badge, Button, EmptyState, Field, Input, NumberInput, Select, Textarea } from './ui'
 
-const NODE_KINDS: NodeKind[] = ['source', 'load', 'splice', 'ground', 'connector']
+const NODE_KINDS: NodeKind[] = ['source', 'load', 'splice', 'ground', 'connector', 'termination']
 const WIRE_CLASSES: WireClass[] = ['power', 'charging', 'signal', 'ground', 'starter']
 const RETURN_PATHS: { value: ReturnPath; label: string }[] = [
   { value: 'modeled', label: 'Return drawn as its own run' },
@@ -138,9 +138,19 @@ function NodeInspector({
         <Input value={node.location} onChange={(e) => onPatch({ location: e.target.value })} />
       </Field>
 
-      {node.kind === 'load' ? (
+      {node.kind === 'termination' ? (
+        <p className="text-[11px] text-neutral-500">
+          Bare, flush-cut end — no connector, splice or lug is ever ordered for it. Set a current
+          below so it still counts toward the loom's total draw and the drop budget on its way
+          back to source.
+        </p>
+      ) : null}
+
+      {node.kind === 'load' || node.kind === 'termination' ? (
         <fieldset className="space-y-2 rounded-md border border-neutral-800 p-2.5">
-          <legend className="px-1 text-[11px] uppercase tracking-wide text-neutral-500">Load</legend>
+          <legend className="px-1 text-[11px] uppercase tracking-wide text-neutral-500">
+            {node.kind === 'termination' ? 'Current' : 'Load'}
+          </legend>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Continuous (A)">
               <NumberInput

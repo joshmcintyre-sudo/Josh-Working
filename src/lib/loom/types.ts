@@ -7,7 +7,7 @@
  * naming conventions.
  */
 
-export type NodeKind = 'source' | 'load' | 'splice' | 'ground' | 'connector'
+export type NodeKind = 'source' | 'load' | 'splice' | 'ground' | 'connector' | 'termination'
 
 export type Duty = 'continuous' | 'intermittent' | 'momentary'
 

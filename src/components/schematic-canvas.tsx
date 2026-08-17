@@ -27,6 +27,7 @@ const KIND_STYLE: Record<NodeKind, { fill: string; stroke: string; label: string
   splice: { fill: '#2a2416', stroke: '#c9a227', label: 'SPL' },
   ground: { fill: '#1f1f1f', stroke: '#8a8a8a', label: 'GND' },
   connector: { fill: '#20302a', stroke: '#3fae72', label: 'CON' },
+  termination: { fill: '#26262b', stroke: '#8a8a95', label: 'CUT' },
 }
 
 interface Props {

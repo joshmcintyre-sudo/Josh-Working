@@ -37,7 +37,7 @@ create table public.loom_nodes (
   -- separate from the surrogate key so a loom can be duplicated or exported
   -- without rewriting every edge.
   node_key            text not null,
-  kind                text not null check (kind in ('source', 'load', 'splice', 'ground', 'connector')),
+  kind                text not null check (kind in ('source', 'load', 'splice', 'ground', 'connector', 'termination')),
   name                text not null,
   location            text not null default '',
   position            jsonb not null,

@@ -74,6 +74,9 @@ than a fan of loose lines.
 Sleeving, conduit and tape belong to a **segment**, never to a wire, because
 that is how they are fitted. Bundle diameter is derived from the conductors
 inside at 75 % packing plus a tape allowance, and the sleeve is chosen from it.
+The catalog in `data/connectors.json`'s `protection` array covers convoluted
+tubing, expandable braid, and a PVC/cloth tape wrap — any segment can carry one
+of those, or none (an explicit, not a default, choice).
 
 A run with `lengthFromRouting` takes its cut length from the segments it passes
 through plus its tails. That is the point of a trunk: lengthen the trunk and
@@ -155,6 +158,28 @@ through `pdfSafe()`, which transliterates `→ ⌀ ≤ ≥ ×` and drops anythin
 node names and notes are typed by people and an emoji would otherwise corrupt
 the sheet. WinAnsi is Latin-1 *plus* the 0x80-0x9F block, so `—`, smart quotes
 and `•` are fine and must not be stripped. `·`, `²` and `°` are Latin-1.
+
+**A `termination` node is a bare, flush-cut wire end** — cut to length, no
+connector, no splice, no lug, ever. It counts toward total loom current and the
+cumulative drop budget exactly like a `load` node (give it a `LoadSpec`); the
+only difference is nothing is ever ordered for it in the BOM. The cut list
+notes "flush cut, no connector" on that end so it reads as a decision, not a
+gap in the drawing.
+
+**Bundles and branches nest to any depth.** A segment is just an edge in an
+undirected graph, so `splitSegment` on a segment that was itself produced by an
+earlier split adds a branch off a branch, with no special-casing anywhere.
+
+**`duplicateBranch` clones a whole device, not one node.** Most looms here
+start from an existing hand-built one, so duplicating — not drawing from
+scratch — is the normal workflow. Pick a root (the device, or the connector it
+plugs into); everything hanging off it away from the rest of the loom comes
+with it, reattached at a splice/breakout you choose, on the *same* circuit id
+as the original (another run of the same circuit, per the "splice feeds
+strobe #2" idiom, not a new one that happens to look the same). Ground is the
+one exception: it is rebuilt straight to the original's far ground node rather
+than through the new attachment point, because a shared chassis ground bus
+is normally reached independently of wherever the power trunk gets spliced.
 
 ## Testing
 

@@ -25,6 +25,8 @@ function Editor() {
   const [confirm, setConfirm] = useState<{ title: string; body: React.ReactNode; run: () => void } | null>(null)
   const [splice, setSplice] = useState<{ edgeId: string; max: number } | null>(null)
   const [bundleFrom, setBundleFrom] = useState<string | null>(null)
+  const [branchFrom, setBranchFrom] = useState<string | null>(null)
+  const [branchTarget, setBranchTarget] = useState<{ segmentId: string; max: number } | null>(null)
   const [releasing, setReleasing] = useState(false)
   const [released, setReleased] = useState<string | null>(null)
 
@@ -52,10 +54,14 @@ function Editor() {
               ? 'Connector'
               : kind === 'splice'
                 ? 'Splice'
-                : 'Power source',
+                : kind === 'termination'
+                  ? 'Flush cut'
+                  : 'Power source',
       location: '',
       position: { x: 260 + loom.nodes.length * 12, y: 140 + (loom.nodes.length % 7) * 66 },
-      ...(kind === 'load' ? { load: { continuousCurrent_a: 1, duty: 'continuous' as const } } : {}),
+      ...(kind === 'load' || kind === 'termination'
+        ? { load: { continuousCurrent_a: 1, duty: 'continuous' as const } }
+        : {}),
       ...(kind === 'source'
         ? { source: { nominalVoltage_v: loom.settings.systemVoltage_v, capacity_a: 120 } }
         : {}),
@@ -68,6 +74,12 @@ function Editor() {
   }
 
   const connect = (fromId: string, toId: string) => {
+    // Attaching a duplicated branch to an existing node instead of drawing a wire.
+    if (branchFrom) {
+      ctx.duplicateBranch(branchFrom, { nodeId: toId })
+      setBranchFrom(null)
+      return
+    }
     // Drawing a bundle instead of a wire.
     if (bundleFrom) {
       ctx.connectBundle(bundleFrom, toId, 500)
@@ -157,6 +169,11 @@ function Editor() {
       return [
         { label: 'Duplicate', hint: 'with its ratings', onSelect: () => ctx.duplicate(selection.id) },
         {
+          label: branchFrom === selection.id ? 'Cancel duplicate branch' : 'Duplicate branch, off…',
+          hint: 'device + connector, reattached elsewhere',
+          onSelect: () => setBranchFrom(branchFrom === selection.id ? null : selection.id),
+        },
+        {
           label: bundleFrom === selection.id ? 'Cancel bundle' : 'Start bundle from here',
           onSelect: () => setBundleFrom(bundleFrom === selection.id ? null : selection.id),
         },
@@ -172,6 +189,16 @@ function Editor() {
     if (selection.kind === 'segment') {
       const load = analysis.segments.find((x) => x.segment.id === selection.id)
       return [
+        ...(branchFrom
+          ? [
+              {
+                label: 'Attach duplicate here…',
+                hint: 'adds a breakout',
+                onSelect: () =>
+                  load && setBranchTarget({ segmentId: selection.id, max: load.segment.length_mm }),
+              },
+            ]
+          : []),
         {
           label: 'Straighten bundle',
           disabled: !analysis.segments.find((x) => x.segment.id === selection.id)?.segment.routing
@@ -279,7 +306,7 @@ function Editor() {
         <aside className="flex w-60 shrink-0 flex-col border-r border-neutral-800">
           <Panel title="Add" className="!h-auto shrink-0">
             <div className="grid grid-cols-2 gap-1.5 p-2">
-              {(['load', 'splice', 'connector', 'ground', 'source'] as NodeKind[]).map((k) => (
+              {(['load', 'splice', 'connector', 'ground', 'source', 'termination'] as NodeKind[]).map((k) => (
                 <Button key={k} size="sm" onClick={() => addNode(k)}>
                   {k}
                 </Button>
@@ -333,8 +360,11 @@ function Editor() {
               onMoveNode={(id, position) => ctx.patchNode(id, { position })}
               onConnect={connect}
               onContextMenu={(sel, at) => setMenu({ selection: sel, at })}
-              linkFromNodeId={bundleFrom}
-              onLinkCancel={() => setBundleFrom(null)}
+              linkFromNodeId={branchFrom ?? bundleFrom}
+              onLinkCancel={() => {
+                setBranchFrom(null)
+                setBundleFrom(null)
+              }}
             />
           ) : (
             <FormboardView
@@ -373,6 +403,15 @@ function Editor() {
           </div>
         </aside>
       </div>
+
+      {branchFrom ? (
+        <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center">
+          <div className="rounded-md border border-sky-800 bg-sky-950/90 px-3 py-1.5 text-xs text-sky-200">
+            Duplicating "{loom.nodes.find((n) => n.id === branchFrom)?.name}" — click a node to attach
+            it there, or right-click a bundle for a breakout at a chosen distance. Esc to cancel.
+          </div>
+        </div>
+      ) : null}
 
       {bundleFrom ? (
         <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center">
@@ -449,6 +488,27 @@ function Editor() {
             setSplice(null)
           }}
           onCancel={() => setSplice(null)}
+        />
+      ) : null}
+
+      {branchTarget ? (
+        <DistancePrompt
+          title="Attach duplicate"
+          body="Distance from the start of the bundle. A breakout is added there and the duplicate's own wires and pigtail attach to it."
+          max={branchTarget.max}
+          defaultValue={Math.round(branchTarget.max / 2)}
+          confirmLabel="Attach here"
+          onConfirm={(value) => {
+            if (branchFrom) {
+              ctx.duplicateBranch(branchFrom, {
+                segmentId: branchTarget.segmentId,
+                distance_mm: value,
+              })
+            }
+            setBranchFrom(null)
+            setBranchTarget(null)
+          }}
+          onCancel={() => setBranchTarget(null)}
         />
       ) : null}
     </Shell>

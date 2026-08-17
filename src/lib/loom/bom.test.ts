@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { analyseLoom } from './analysis'
 import { bomCsv, buildBom, buildCutList, cutListCsv, toCsv } from './bom'
 import { DEMO_LOOM } from './demo-loom'
+import { DEFAULT_SETTINGS, type Loom } from './types'
 
 const analysis = analyseLoom(DEMO_LOOM)
 
@@ -148,5 +149,60 @@ describe('wire references', () => {
   it('gives every physical wire a unique label', () => {
     const refs = rows.map((r) => r.wireRef)
     expect(new Set(refs).size).toBe(refs.length)
+  })
+})
+
+describe('termination (flush-cut) nodes', () => {
+  function loomWithTermination(): Loom {
+    return {
+      id: 'cut',
+      name: 'cut',
+      revision: 'A',
+      settings: { ...DEFAULT_SETTINGS },
+      nodes: [
+        {
+          id: 'bat',
+          kind: 'source',
+          name: 'Battery',
+          location: 'x',
+          position: { x: 0, y: 0 },
+          source: { nominalVoltage_v: 12, capacity_a: 200 },
+        },
+        {
+          id: 'end',
+          kind: 'termination',
+          name: 'Accessory tail',
+          location: 'x',
+          position: { x: 1, y: 0 },
+          load: { duty: 'continuous', continuousCurrent_a: 5 },
+        },
+      ],
+      edges: [
+        {
+          id: 'feed',
+          fromNodeId: 'bat',
+          toNodeId: 'end',
+          circuitId: 'C-1',
+          length_mm: 500,
+          class: 'power',
+          returnPath: 'chassis',
+        },
+      ],
+    }
+  }
+
+  it('orders no connector or splice hardware for the bare end, and only the battery stud gets a lug', () => {
+    const bom = buildBom(analyseLoom(loomWithTermination()))
+    expect(bom.groups.find((g) => g.title === 'Connectors')).toBeUndefined()
+    expect(bom.groups.find((g) => g.title === 'Splices')).toBeUndefined()
+    // The one ring terminal ordered is the battery stud end — nothing is fitted
+    // to the termination end of the same run.
+    const terminations = bom.groups.find((g) => g.title === 'Terminations')!
+    expect(terminations.lines.reduce((t, l) => t + Number(l.quantity), 0)).toBe(1)
+  })
+
+  it('flags the flush cut in the cut list notes so it reads as a decision, not an omission', () => {
+    const rows = buildCutList(analyseLoom(loomWithTermination()))
+    expect(rows[0]!.notes).toContain('flush cut, no connector')
   })
 })
