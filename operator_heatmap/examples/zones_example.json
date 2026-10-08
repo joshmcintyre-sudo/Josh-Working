@@ -1,0 +1,14 @@
+{
+  "_help": "Pixel coords are in the ANALYSED view (fixed cam = raw frame; 360 = dewarped view). Get them by opening the *_combined.png in Paint/Preview and hovering.",
+  "zones": {
+    "Press 1":        [[120, 380], [520, 380], [520, 700], [120, 700]],
+    "Assembly bench": [[700, 420], [1150, 420], [1150, 760], [700, 760]],
+    "Racking":        [[1300, 250], [1820, 250], [1820, 640], [1300, 640]],
+    "Weld cell":      [[600, 820], [1100, 820], [1100, 1060], [600, 1060]]
+  },
+  "calibration": {
+    "_help": "4 floor points visible in the image (e.g. pallet corners, floor-tape cross) and their real positions in metres. Or replace with {\"px_per_m\": 85}",
+    "image":   [[300, 900], [1600, 900], [1450, 450], [450, 450]],
+    "floor_m": [[0, 0],     [12, 0],     [12, 15],    [0, 15]]
+  }
+}

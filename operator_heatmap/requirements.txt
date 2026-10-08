@@ -1,0 +1,7 @@
+opencv-python-headless>=4.9
+numpy>=1.26
+reportlab>=4.0
+streamlit>=1.35
+pandas>=2.0
+ultralytics>=8.3   # YOLO person detector; optional if you only use --backend motion
+lap>=0.5           # needed by ultralytics ByteTrack
