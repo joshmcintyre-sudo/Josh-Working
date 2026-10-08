@@ -88,6 +88,39 @@ def draw_zones(img: np.ndarray, a: Analysis, show_flows: bool = True) -> np.ndar
     return out
 
 
+def draw_legend(img: np.ndarray, a: Analysis) -> np.ndarray:
+    """Operator colour key, top-left."""
+    if not a.paths:
+        return img
+    h, w = img.shape[:2]
+    s = max(w, h) / 1600
+    fs, th, row = 0.6 * s, max(1, int(1.5 * s)), int(26 * s)
+    labels = [p.operator for p in a.paths]
+    tw = max(cv2.getTextSize(l, cv2.FONT_HERSHEY_SIMPLEX, fs, th)[0][0] for l in labels)
+    out = img.copy()
+    cv2.rectangle(out, (8, 8), (int(40 * s) + tw + 16, 16 + row * len(labels)), (255, 255, 255), -1)
+    for i, label in enumerate(labels):
+        y = 14 + row * i + row // 2
+        cv2.line(out, (16, y), (int(16 + 22 * s), y), _track_colour(i), max(2, int(4 * s)), cv2.LINE_AA)
+        cv2.putText(out, label, (int(24 + 22 * s), y + int(6 * s)), cv2.FONT_HERSHEY_SIMPLEX, fs, (20, 20, 20), th,
+                    cv2.LINE_AA)
+    return out
+
+
+def render_operators(base_frame: np.ndarray, a: Analysis) -> dict[str, np.ndarray]:
+    """One image per operator: their own heat map + path in their legend colour."""
+    h, w = base_frame.shape[:2]
+    base = _faded_base(base_frame)
+    out = {}
+    for i, path in enumerate(a.paths):
+        solo = Analysis(paths=[path], zones=a.zones, sample_dt=a.sample_dt,
+                        dwell_s=a.dwell_by_op.get(path.operator, {}))
+        img = draw_heatmap(base, heat_layer(solo, (w, h)), alpha=0.5)
+        img = draw_spaghetti(img, solo, single_colour=_track_colour(i))
+        out[path.operator] = draw_zones(img, solo, show_flows=False)
+    return out
+
+
 def render_all(base_frame: np.ndarray, a: Analysis) -> dict[str, np.ndarray]:
     """Returns the three PDF images: combined, heatmap-only, spaghetti-only (BGR)."""
     h, w = base_frame.shape[:2]
@@ -101,5 +134,5 @@ def render_all(base_frame: np.ndarray, a: Analysis) -> dict[str, np.ndarray]:
     return {
         "combined": combined,
         "heatmap": draw_zones(heat_img, a, show_flows=False),
-        "spaghetti": draw_zones(draw_spaghetti(base, a), a),
+        "spaghetti": draw_zones(draw_spaghetti(base, a), a),  # legend added after any crop
     }

@@ -3,6 +3,7 @@
 
 Examples
   python heatmap_cli.py line3.mp4 --segments "00:05:00-00:20:00, 01:10:00-01:25:00"
+  python heatmap_cli.py roof360.mp4 --camera fisheye --mount-height 7.5 --operators 6
   python heatmap_cli.py cell360.mp4 --camera 360 --yaw 90 --pitch -30 --fov 110
   python heatmap_cli.py line3.mp4 --config examples/zones_example.json --base-time 00:06:10
 """
@@ -17,7 +18,8 @@ def main():
     ap.add_argument("video")
     ap.add_argument("--out-dir", default="output")
     ap.add_argument("--title", default="")
-    ap.add_argument("--camera", choices=["fixed", "360"], default="fixed")
+    ap.add_argument("--camera", choices=["fixed", "fisheye", "360"], default="fixed",
+                    help="fisheye = ceiling 360 (circular image); 360 = equirectangular panorama")
     ap.add_argument("--segments", default="", help='e.g. "00:01:00-00:04:00, 10:00-12:30" (blank = all)')
     ap.add_argument("--base-time", default="", help="timestamp of background photo")
     ap.add_argument("--backend", choices=["yolo", "motion"], default="yolo")
@@ -30,6 +32,16 @@ def main():
     ap.add_argument("--pitch", type=float, default=-20.0)
     ap.add_argument("--fov", type=float, default=100.0)
     ap.add_argument("--min-track-s", type=float, default=2.0)
+    ap.add_argument("--operators", type=int, default=0, help="known headcount on the floor (0 = auto)")
+    ap.add_argument("--stitch-gap-s", type=float, default=15.0, help="max seconds hidden before a new ID")
+    ap.add_argument("--imgsz", type=int, default=960, help="1280 for small/distant operators")
+    ap.add_argument("--mount-height", type=float, default=0.0, help="fisheye lens height (m) -> metres walked")
+    ap.add_argument("--lens-fov", type=float, default=180.0)
+    ap.add_argument("--lens-model", choices=["equidistant", "equisolid"], default="equidistant")
+    ap.add_argument("--fisheye-circle", default="", help='"cx,cy,r" if auto-detect is wrong')
+    ap.add_argument("--tiles", type=int, default=6)
+    ap.add_argument("--roi", default="", help='area isolation JSON, e.g. \'{"include":[{"sector":[200,320,20,90]}]}\'')
+    ap.add_argument("--no-crop", dest="crop_output", action="store_false", help="keep full view in PDF")
     a = ap.parse_args()
 
     opts = Options(**{k: v for k, v in vars(a).items()})
@@ -45,7 +57,9 @@ def main():
     out = run(opts, progress)
     sys.stderr.write("\n")
     for k, v in out.items():
-        print(f"{k:10s} {v}")
+        if isinstance(v, str):
+            print(f"{k:14s} {v}")
+    print(f"operators      {len(out['analysis'].paths)}")
 
 
 if __name__ == "__main__":
