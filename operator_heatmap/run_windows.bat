@@ -23,6 +23,11 @@ if not exist .venv\installed.ok (
   pip install -r requirements.txt || (echo Install failed - see messages above & pause & exit /b 1)
   echo ok> .venv\installed.ok
 )
+rem Skip Streamlit's one-off "enter your email" prompt
+if not exist "%USERPROFILE%\.streamlit\credentials.toml" (
+  mkdir "%USERPROFILE%\.streamlit" 2>nul
+  (echo [general]& echo email = "") > "%USERPROFILE%\.streamlit\credentials.toml"
+)
 echo Starting app - your browser will open at http://localhost:8501  (close this window to stop)
 streamlit run app.py
 pause
