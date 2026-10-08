@@ -2,7 +2,13 @@
 
 Factory camera footage (fixed, 360 ceiling fisheye, or 360 panorama) with **multiple operators** → PDF with a base photo of the area, a dwell **heat map** and a **spaghetti diagram** of operator walking paths, plus a data page.
 
-## Install (Windows / Mac / Linux, Python 3.10+)
+## Quick start (Windows)
+1. Download: https://github.com/joshmcintyre-sudo/Josh-Working/archive/refs/heads/ccr-6f07bd32-8ig2xl.zip → unzip
+2. Install Python 3.11+ from https://www.python.org/downloads/ (tick **Add python.exe to PATH**)
+3. Open `operator_heatmap` → double-click **`run_windows.bat`** (first run installs, ~5–10 min) → browser opens at http://localhost:8501
+Mac/Linux: `./run_mac_linux.sh`
+
+## Install manually (Windows / Mac / Linux, Python 3.10+)
 ```bash
 cd operator_heatmap
 pip install -r requirements.txt
