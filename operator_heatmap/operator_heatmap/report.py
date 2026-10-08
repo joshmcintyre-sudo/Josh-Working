@@ -67,12 +67,20 @@ def build_pdf(out_path: str, images: dict[str, np.ndarray], a: Analysis, meta: d
     c = canvas.Canvas(out_path, pagesize=size)
     c.setTitle(f"Operator movement - {meta['title']}")
     with tempfile.TemporaryDirectory() as tmp:
-        for key, title in (("combined", "Operator movement - heat map + spaghetti"),
-                           ("heatmap", "Dwell heat map"),
-                           ("spaghetti", "Spaghetti diagram (one colour per operator)")):
+        thr = a.through
+        pages = (("combined", "Everyone - heat map + paths", sub),
+                 ("operators", "Operators working the area", sub + f"  |  crew on floor: typical {a.crew['median']:.0f}, "
+                                                                  f"peak {a.crew['max']:.0f}"),
+                 ("through", "Through-traffic (passing through, e.g. warehouse, other lines, managers)",
+                  sub + f"  |  {thr['passes']:.0f} passes, {thr['per_hour']:.0f}/h, avg {thr['avg_s']:.0f} s in area"),
+                 ("heatmap", "Dwell heat map - everyone", sub),
+                 ("spaghetti", "Spaghetti diagram - operators in colour, through-traffic grey", sub))
+        for key, title, subtitle in pages:
+            if key not in images:
+                continue
             if key != "spaghetti":
                 _legend(c, size)
-            _image_page(c, images[key], f"{meta['title']} - {title}", sub, size, tmp)
+            _image_page(c, images[key], f"{meta['title']} - {title}", subtitle, size, tmp)
         for op, img in list((op_images or {}).items())[:max_op_pages]:
             km = f"  |  {a.distance_m[op]:,.0f} m walked" if op in a.distance_m else ""
             _image_page(c, img, f"{meta['title']} - {op}",
@@ -86,27 +94,47 @@ def build_pdf(out_path: str, images: dict[str, np.ndarray], a: Analysis, meta: d
     c.drawString(m, ph - m - 18, sub)
 
     hc = [n for _, n in meta.get("headcount", [])]
+    ops = [p for p in a.paths if a.roles.get(p.operator, "operator") == "operator"]
+    main = [p for p in ops if p.operator in a.main_operators] or ops
+    frag = [p for p in ops if p not in main]
+    thr = [p for p in a.paths if a.roles.get(p.operator) == "through"]
     kpis = [["Metric", "Value"],
             ["Time analysed", f"{analysed / 60:.1f} min over {len(segs)} segment(s)"],
             ["Frames analysed", f"{meta['frames']} @ {meta['sample_fps']:g} fps"],
-            ["Operators identified", str(len(a.paths))]]
+            ["Operators on floor at once - typical / 95% / peak",
+             f"{a.crew.get('median', 0):.0f} / {a.crew.get('p95', 0):.0f} / {a.crew.get('max', 0):.0f}"],
+            ["Operators with own page (in area long enough)", str(len(main))],
+            ["Through-traffic passes (per hour)",
+             f"{a.through.get('passes', 0):.0f} ({a.through.get('per_hour', 0):.0f}/h)"],
+            ["Through-traffic time in area", f"{a.through.get('total_s', 0) / 60:.1f} min "
+                                             f"(avg {a.through.get('avg_s', 0):.0f} s per pass)"]]
     if hc:
-        kpis += [["People on screen - max / average", f"{max(hc)} / {np.mean(hc):.1f}"]]
+        kpis += [["Anyone on screen - max / average", f"{max(hc)} / {np.mean(hc):.1f}"]]
     if a.distance_m:
-        total_m = sum(a.distance_m.values())
-        kpis += [["Total distance walked (all operators)", f"{total_m:,.0f} m"],
-                 ["Distance per operator-hour", f"{total_m / max(sum(a.active_s.values()) / 3600, 1e-9):,.0f} m/h"]]
-    y = _table(c, kpis, m, ph - m - 40, [75 * mm, 60 * mm])
+        op_m = sum(a.distance_m.get(p.operator, 0) for p in ops)
+        op_s = sum(a.active_s.get(p.operator, 0) for p in ops)
+        kpis += [["Distance walked - operators", f"{op_m:,.0f} m ({op_m / max(op_s / 3600, 1e-9):,.0f} m per operator-hour)"],
+                 ["Distance walked - through-traffic", f"{sum(a.distance_m.get(p.operator, 0) for p in thr):,.0f} m"]]
+    y = _table(c, kpis, m, ph - m - 40, [85 * mm, 60 * mm])
 
-    rows = [["Operator", "Active (min)", "Walked (m)" if a.distance_m else "Path (px)", "Most time in", "% there"]]
-    for p in sorted(a.paths, key=lambda p: -a.active_s.get(p.operator, 0))[:25]:
-        dw = a.dwell_by_op.get(p.operator) or {}
+    def row(label, ps):
+        act = sum(a.active_s.get(p.operator, 0) for p in ps)
+        dw: dict = {}
+        for p in ps:
+            for z, v in (a.dwell_by_op.get(p.operator) or {}).items():
+                dw[z] = dw.get(z, 0) + v
         top = max(dw.items(), key=lambda kv: kv[1]) if dw else ("-", 0)
-        act = a.active_s.get(p.operator, 0)
-        rows.append([p.operator, f"{act / 60:.1f}",
-                     f"{a.distance_m.get(p.operator, 0):,.0f}" if a.distance_m else f"{p.length_px():,.0f}",
-                     top[0], f"{100 * top[1] / act:.0f}%" if act and dw else "-"])
-    y = _table(c, rows, m, y - 8 * mm, [40 * mm, 24 * mm, 24 * mm, 40 * mm, 16 * mm])
+        dist = sum(a.distance_m.get(p.operator, 0) for p in ps) if a.distance_m else sum(p.length_px() for p in ps)
+        return [label, f"{act / 60:.1f}", f"{dist:,.0f}", top[0], f"{100 * top[1] / act:.0f}%" if act and dw else "-"]
+
+    rows = [["Person", "Time in area (min)", "Walked (m)" if a.distance_m else "Path (px)", "Most time in", "% there"]]
+    for p in sorted(main, key=lambda p: -a.active_s.get(p.operator, 0))[:20]:
+        rows.append(row(p.operator, [p]))
+    if frag:
+        rows.append(row(f"Short operator tracks ({len(frag)})", frag))
+    if thr:
+        rows.append(row(f"Through-traffic ({a.through.get('passes', len(thr)):.0f} passes)", thr))
+    y = _table(c, rows, m, y - 8 * mm, [48 * mm, 28 * mm, 24 * mm, 36 * mm, 16 * mm])
 
     if a.dwell_s and y > 50 * mm:
         rows = [["Zone", "Dwell (min)", "% of tracked time"]]
@@ -126,8 +154,8 @@ def build_pdf(out_path: str, images: dict[str, np.ndarray], a: Analysis, meta: d
 
     c.setFont("Helvetica-Oblique", 7)
     c.setFillColor(colors.grey)
-    c.drawString(m, 6 * mm, "Operators are anonymous (Operator 1, 2...) unless named in the app. Identities are rebuilt from "
-                            "movement + clothing colour; check per-operator pages before using individual figures.")
+    c.drawString(m, 6 * mm, "Anonymous unless named in the app. Operator = in the area long enough to be working it; through-traffic = short "
+                            "visit entering and leaving at the view edge / a doorway. Crew size is measured, not entered.")
     c.showPage()
     c.save()
 

@@ -11,6 +11,8 @@ Spec (JSON, also accepted under "roi" in the zones config):
   "exclude": [ ... same shapes ... ]
 }
 No include shapes = whole view. Excludes are always cut out.
+"entry": [...] marks doorways / aisles inside the view: a short track that starts and ends at the view
+edge OR in an entry zone is counted as through-traffic (people passing, not working the area).
 """
 from __future__ import annotations
 
@@ -47,6 +49,7 @@ class ROI:
     size: tuple[int, int]
     include: list[np.ndarray] = field(default_factory=list)
     exclude: list[np.ndarray] = field(default_factory=list)
+    entries: list[np.ndarray] = field(default_factory=list)  # doorways / aisles people walk in and out of
 
     @classmethod
     def from_spec(cls, spec: dict | str | None, size: tuple[int, int]) -> "ROI | None":
@@ -55,8 +58,9 @@ class ROI:
         if isinstance(spec, str):
             spec = json.loads(spec)
         roi = cls(size, [_shape_to_poly(s, size) for s in spec.get("include", [])],
-                  [_shape_to_poly(s, size) for s in spec.get("exclude", [])])
-        return roi if roi.include or roi.exclude else None
+                  [_shape_to_poly(s, size) for s in spec.get("exclude", [])],
+                  [_shape_to_poly(s, size) for s in spec.get("entry", [])])
+        return roi if roi.include or roi.exclude or roi.entries else None
 
     @property
     def mask(self) -> np.ndarray:
@@ -89,6 +93,23 @@ class ROI:
         return float((self.mask > 0).mean())
 
 
+def edge_distance(size: tuple[int, int], roi: "ROI | None", fisheye: bool = False):
+    """f(x, y) -> pixels to the nearest place people can walk in/out: edge of the analysed area
+    (frame edge, selection edge, fisheye circle) or an entry zone (0 inside it)."""
+    w, h = size
+    area = np.full((h, w), 255, np.uint8) if roi is None else roi.mask.copy()
+    if fisheye:
+        circ = np.zeros((h, w), np.uint8)
+        cv2.circle(circ, (w // 2, h // 2), int(0.97 * min(w, h) / 2), 255, -1)
+        area &= circ
+    if roi is not None:
+        for p in roi.entries:
+            cv2.fillPoly(area, [p.astype(np.int32)], 0)  # entry zones count as "outside"
+    padded = cv2.copyMakeBorder(area, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    dist = cv2.distanceTransform(padded, cv2.DIST_L2, 5)[1:-1, 1:-1]
+    return lambda x, y: float(dist[min(max(int(y), 0), h - 1), min(max(int(x), 0), w - 1)])
+
+
 def preview(frame: np.ndarray, roi: ROI | None) -> np.ndarray:
     """Dim what is ignored, outline what is analysed - for the app preview and the PDF."""
     if roi is None:
@@ -98,4 +119,6 @@ def preview(frame: np.ndarray, roi: ROI | None) -> np.ndarray:
     out = np.where(m[..., None] > 0, frame, dim)
     cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(out, cnts, -1, (255, 160, 0), max(2, frame.shape[1] // 600), cv2.LINE_AA)
+    for p in roi.entries:  # doorways in green
+        cv2.polylines(out, [p.astype(np.int32)], True, (60, 200, 60), max(2, frame.shape[1] // 500), cv2.LINE_AA)
     return out

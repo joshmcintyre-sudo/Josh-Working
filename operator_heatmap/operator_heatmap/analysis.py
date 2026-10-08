@@ -101,14 +101,22 @@ def _app_dist(a, b) -> float:
 
 def resolve_identities(points: list[TrackPoint], appearance: dict[int, np.ndarray], view_size: tuple[int, int],
                        n_operators: int | None = None, labels: dict[int, str] | None = None,
-                       max_gap_s: float = 15.0, max_app: float = 0.45, min_points: int = 3) -> dict[int, str]:
-    """Map raw tracker IDs -> operator names.
+                       max_gap_s: float = 15.0, max_app: float = 0.45, min_points: int = 3,
+                       edge_dist=None, analysed_s: float | None = None, resident_min_s: float | None = None,
+                       return_roles: bool = False):
+    """Map raw tracker IDs -> people, and tell resident operators from through-traffic.
 
     1. Stitch: track B continues track A if B starts after A ends, the jump is walkable in the gap,
        and clothing colours match (occlusion behind racking/pillars, missed detections).
-    2. Headcount hint: if you know N operators work the cell, merge the remaining chains by
-       appearance (never merging two that are on screen at the same time) until N remain.
-    3. Manual labels from the app override everything ("ignore" drops a track, e.g. forklift driver).
+    2. Roles (no headcount needed):
+       - resident  = in the area for long (>= resident_min_s, default min(90 s, 40% of analysed time))
+       - short track that starts AND ends at the edge of the view / selected area = through-traffic
+         (warehouse team, other lines, managers walking through)
+       - short track that starts or ends mid-floor = a lost piece of a resident -> rejoined to the
+         resident with matching clothes who was not on screen at that moment
+       - same-looking residents never on screen together = one person who left and came back
+    3. Optional headcount hint: merge residents until N remain.
+    4. Manual labels from the app override everything ("ignore" drops a track).
     """
     tls = {t.tid: t for t in _tracklets(points, appearance, min_points)}
     diag = float(np.hypot(*view_size))
@@ -139,47 +147,113 @@ def resolve_identities(points: list[TrackPoint], appearance: dict[int, np.ndarra
             chain.append(nxt[chain[-1]])
         groups.append(chain)
 
-    # 2. headcount hint
-    if n_operators:
-        def sig(g):
-            hs = [tls[t].hist * tls[t].n for t in g if tls[t].hist is not None]
-            return (sum(hs) / (sum(h.sum() for h in hs) + 1e-9)).astype(np.float32) if hs else None
+    def sig(g):
+        hs = [tls[t].hist * tls[t].n for t in g if tls[t].hist is not None]
+        return (sum(hs) / (sum(h.sum() for h in hs) + 1e-9)).astype(np.float32) if hs else None
 
-        def overlap(g1, g2):
-            return sum(max(0.0, min(tls[a].t1, tls[b].t1) - max(tls[a].t0, tls[b].t0)) for a in g1 for b in g2)
+    def overlap(g1, g2):
+        return sum(max(0.0, min(tls[a].t1, tls[b].t1) - max(tls[a].t0, tls[b].t0)) for a in g1 for b in g2)
 
-        def span(g):
-            return sum(tls[t].t1 - tls[t].t0 for t in g)
+    def span(g):
+        return sum(tls[t].t1 - tls[t].t0 for t in g)
 
-        while len(groups) > n_operators:
-            sigs = [sig(g) for g in groups]
+    def compatible(g1, g2):  # never both on screen (small allowance for swap-cut lag)
+        return overlap(g1, g2) <= max(2.0, 0.05 * min(span(g1), span(g2)))
+
+    # 2. roles
+    if analysed_s is None:
+        analysed_s = max((t.t1 for t in tls.values()), default=0) - min((t.t0 for t in tls.values()), default=0)
+    res_min = resident_min_s if resident_min_s is not None else min(90.0, 0.4 * max(analysed_s, 1))
+    edge = edge_dist or (lambda x, y: min(x, y, view_size[0] - x, view_size[1] - y))
+    edge_px = 0.10 * diag  # fast walkers are often first picked up a little way in
+
+    def at_edge(g):
+        first = min(g, key=lambda t: tls[t].t0)
+        last = max(g, key=lambda t: tls[t].t1)
+        return edge(*tls[first].p0) <= edge_px and edge(*tls[last].p1) <= edge_px
+
+    residents = [g for g in groups if span(g) >= res_min]
+    short = [g for g in groups if span(g) < res_min]
+    through, orphans = [], []
+    for g in sorted(short, key=span, reverse=True):
+        if at_edge(g):
+            through.append(g)
+            continue
+        # lost piece of a resident: best clothing match among residents free at that time
+        sg = sig(g)
+        cands = [(_app_dist(sig(r), sg), i) for i, r in enumerate(residents) if compatible(r, g)]
+        cands = [c for c in cands if c[0] <= 0.5]
+        if cands:
+            residents[min(cands)[1]] += g
+        else:
+            orphans.append(g)
+    residents += orphans  # mid-floor tracks with no match: keep as their own (short) operator
+
+    def merge_reentries(gs, thresh):
+        merged = True
+        while merged:
+            merged = False
+            sigs = [sig(g) for g in gs]
             best = None
-            for i in range(len(groups)):
-                for j in range(i + 1, len(groups)):
-                    # both visible at once -> two different people (small allowance for swap-cut lag)
-                    if overlap(groups[i], groups[j]) > max(2.0, 0.05 * min(span(groups[i]), span(groups[j]))):
+            for i in range(len(gs)):
+                for j in range(i + 1, len(gs)):
+                    if compatible(gs[i], gs[j]):
+                        d = _app_dist(sigs[i], sigs[j])
+                        if d <= thresh and (best is None or d < best[0]):
+                            best = (d, i, j)
+            if best:
+                _, i, j = best
+                gs[i] += gs.pop(j)
+                merged = True
+        return gs
+
+    passes = len(through)
+    residents = merge_reentries(residents, 0.30)
+    through = merge_reentries(through, 0.20)  # same visitor walking through again (strict: uniforms look alike)
+
+    # 3. optional headcount hint (residents only)
+    if n_operators:
+        while len(residents) > n_operators:
+            sigs = [sig(g) for g in residents]
+            best = None
+            for i in range(len(residents)):
+                for j in range(i + 1, len(residents)):
+                    if not compatible(residents[i], residents[j]):
                         continue
                     d = _app_dist(sigs[i], sigs[j])
                     if best is None or d < best[0]:
                         best = (d, i, j)
             if best is None:
-                # Still more groups than people: the extras are duplicate boxes of someone already
-                # tracked (person split by a post, reflection). Fold the smallest into its best match.
-                j = min(range(len(groups)), key=lambda k: span(groups[k]))
-                i = min((k for k in range(len(groups)) if k != j), key=lambda k: _app_dist(sigs[k], sigs[j]))
+                # extras are duplicate boxes of someone already tracked (person split by a post)
+                j = min(range(len(residents)), key=lambda k: span(residents[k]))
+                i = min((k for k in range(len(residents)) if k != j),
+                        key=lambda k: _app_dist(sigs[k], sigs[j]))
                 best = (0, min(i, j), max(i, j))
             _, i, j = best
-            groups[i] += groups.pop(j)
+            residents[i] += residents.pop(j)
 
-    groups.sort(key=lambda g: min(tls[t].t0 for t in g))
-    mapping = {t: f"Operator {k + 1}" for k, g in enumerate(groups) for t in g}
+    first = lambda g: min(tls[t].t0 for t in g)
+    mapping, roles = {}, {"_passes": passes}
+    for k, g in enumerate(sorted(residents, key=first)):
+        name = f"Operator {k + 1}"
+        roles[name] = "operator"
+        mapping.update({t: name for t in g})
+    for k, g in enumerate(sorted(through, key=first)):
+        name = f"Through-traffic {k + 1}"
+        roles[name] = "through"
+        mapping.update({t: name for t in g})
 
     # 3. manual overrides
+    auto_role = {t: roles.get(n, "operator") for t, n in mapping.items()}
     for tid, name in (labels or {}).items():
         name = (name or "").strip()
         if name:
             mapping[int(tid)] = name
-    return {t: n for t, n in mapping.items() if n.lower() != "ignore"}
+    for name in set(mapping.values()) - set(roles):  # user names inherit the majority auto role
+        votes = [auto_role.get(t, "operator") for t, n in mapping.items() if n == name]
+        roles[name] = max(set(votes), key=votes.count)
+    mapping = {t: n for t, n in mapping.items() if n.lower() != "ignore"}
+    return (mapping, roles) if return_roles else mapping
 
 
 def _root(prv: dict, t: int) -> int:
@@ -223,6 +297,10 @@ class Analysis:
     zones: list[Zone]
     dwell_s: dict[str, float] = field(default_factory=dict)
     flows: dict[tuple[str, str], int] = field(default_factory=dict)
+    roles: dict[str, str] = field(default_factory=dict)   # person -> "operator" | "through"
+    crew: dict[str, float] = field(default_factory=dict)  # operators on screen at once: median / p95 / max
+    through: dict[str, float] = field(default_factory=dict)  # passes, passes per hour, avg seconds per pass
+    main_operators: list[str] = field(default_factory=list)  # operators present long enough for their own page
     distance_m: dict[str, float] = field(default_factory=dict)
     dwell_by_op: dict[str, dict[str, float]] = field(default_factory=dict)
     active_s: dict[str, float] = field(default_factory=dict)
@@ -260,10 +338,29 @@ def build_paths(points: list[TrackPoint], sample_fps: float, mapping: dict[int, 
 
 
 def analyse(points: list[TrackPoint], sample_fps: float, zones: list[Zone],
-            cal: Calibration, mapping: dict[int, str] | None = None, **path_kw) -> Analysis:
+            cal: Calibration, mapping: dict[int, str] | None = None, roles: dict | None = None,
+            analysed_s: float = 0.0, resident_min_s: float = 60.0, **path_kw) -> Analysis:
     dt = 1.0 / sample_fps
     paths = build_paths(points, sample_fps, mapping, **path_kw)
     a = Analysis(paths=paths, zones=zones, sample_dt=dt)
+    roles = roles or {}
+    a.roles = {p.operator: roles.get(p.operator, "operator") for p in paths}
+
+    # crew size measured from the footage: distinct operators on screen per sampled frame
+    on_screen = defaultdict(set)
+    for path in paths:
+        if a.roles[path.operator] == "operator":
+            for t in path.t:
+                on_screen[round(t * sample_fps)].add(path.operator)
+    counts = np.array([len(v) for v in on_screen.values()]) if on_screen else np.zeros(1)
+    a.crew = {"median": float(np.median(counts)), "p95": float(np.percentile(counts, 95)), "max": float(counts.max())}
+
+    thr = [p for p in paths if a.roles[p.operator] == "through"]
+    n_pass = roles.get("_passes", len(thr))
+    thr_s = sum(len(p.t) * dt for p in thr)
+    a.through = {"passes": n_pass, "people": len(thr),
+                 "per_hour": n_pass / max(analysed_s / 3600, 1e-9) if analysed_s else 0.0,
+                 "avg_s": thr_s / n_pass if n_pass else 0.0, "total_s": thr_s}
 
     for path in paths:
         dist = 0.0
@@ -274,6 +371,8 @@ def analyse(points: list[TrackPoint], sample_fps: float, zones: list[Zone],
         if cal.calibrated:
             a.distance_m[path.operator] = dist
         a.active_s[path.operator] = len(path.t) * dt
+    a.main_operators = [p.operator for p in paths if a.roles[p.operator] == "operator"
+                        and a.active_s[p.operator] >= min(resident_min_s, 0.4 * max(analysed_s, 1))]
 
     if zones:
         dwell = defaultdict(float)

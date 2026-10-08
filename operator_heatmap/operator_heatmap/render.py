@@ -88,20 +88,32 @@ def draw_zones(img: np.ndarray, a: Analysis, show_flows: bool = True) -> np.ndar
     return out
 
 
+THROUGH_COLOUR = (150, 150, 150)
+
+
+def subset(a: Analysis, role: str, names: list[str] | None = None) -> Analysis:
+    """Same analysis restricted to operators or through-traffic (keeps zones + sampling)."""
+    paths = [p for p in a.paths if a.roles.get(p.operator, "operator") == role and (names is None or p.operator in names)]
+    return Analysis(paths=paths, zones=a.zones, sample_dt=a.sample_dt, roles=a.roles,
+                    dwell_s=a.dwell_s if role == "all" else {})
+
+
 def draw_legend(img: np.ndarray, a: Analysis) -> np.ndarray:
-    """Operator colour key, top-left."""
-    if not a.paths:
+    """Operator colour key, top-left (+ grey through-traffic entry)."""
+    ops = subset(a, "operator", a.main_operators or None)
+    if not ops.paths and not subset(a, "through").paths:
         return img
     h, w = img.shape[:2]
     s = max(w, h) / 1600
     fs, th, row = 0.6 * s, max(1, int(1.5 * s)), int(26 * s)
-    labels = [p.operator for p in a.paths]
+    labels = [p.operator for p in ops.paths] + (["Through-traffic"] if subset(a, "through").paths else [])
     tw = max(cv2.getTextSize(l, cv2.FONT_HERSHEY_SIMPLEX, fs, th)[0][0] for l in labels)
     out = img.copy()
     cv2.rectangle(out, (8, 8), (int(40 * s) + tw + 16, 16 + row * len(labels)), (255, 255, 255), -1)
     for i, label in enumerate(labels):
         y = 14 + row * i + row // 2
-        cv2.line(out, (16, y), (int(16 + 22 * s), y), _track_colour(i), max(2, int(4 * s)), cv2.LINE_AA)
+        col = THROUGH_COLOUR if label == "Through-traffic" else _track_colour(i)
+        cv2.line(out, (16, y), (int(16 + 22 * s), y), col, max(2, int(4 * s)), cv2.LINE_AA)
         cv2.putText(out, label, (int(24 + 22 * s), y + int(6 * s)), cv2.FONT_HERSHEY_SIMPLEX, fs, (20, 20, 20), th,
                     cv2.LINE_AA)
     return out
@@ -112,7 +124,7 @@ def render_operators(base_frame: np.ndarray, a: Analysis) -> dict[str, np.ndarra
     h, w = base_frame.shape[:2]
     base = _faded_base(base_frame)
     out = {}
-    for i, path in enumerate(a.paths):
+    for i, path in enumerate(subset(a, "operator", a.main_operators or None).paths):
         solo = Analysis(paths=[path], zones=a.zones, sample_dt=a.sample_dt,
                         dwell_s=a.dwell_by_op.get(path.operator, {}))
         img = draw_heatmap(base, heat_layer(solo, (w, h)), alpha=0.5)
@@ -121,18 +133,27 @@ def render_operators(base_frame: np.ndarray, a: Analysis) -> dict[str, np.ndarra
     return out
 
 
+def _heat_and_trails(base: np.ndarray, a: Analysis) -> np.ndarray:
+    h, w = base.shape[:2]
+    img = draw_heatmap(base, heat_layer(a, (w, h)))
+    # white trails over heat read well; outline them dark so they show on cold areas too
+    img = draw_spaghetti(img, a, single_colour=(30, 30, 30), thickness=max(2, round(max(w, h) / 450)), markers=False)
+    return draw_spaghetti(img, a, single_colour=(255, 255, 255), markers=False)
+
+
 def render_all(base_frame: np.ndarray, a: Analysis) -> dict[str, np.ndarray]:
-    """Returns the three PDF images: combined, heatmap-only, spaghetti-only (BGR)."""
+    """PDF images (BGR): everyone, operators only, through-traffic only, heat only, spaghetti."""
     h, w = base_frame.shape[:2]
     base = _faded_base(base_frame)
-    heat = heat_layer(a, (w, h))
-    heat_img = draw_heatmap(base, heat)
-    # white trails over heat read well; outline them dark so they show on cold areas too
-    combined = draw_zones(draw_spaghetti(draw_spaghetti(heat_img, a, single_colour=(30, 30, 30),
-                                                        thickness=max(2, round(max(w, h) / 450)), markers=False),
-                                         a, single_colour=(255, 255, 255), markers=False), a)
+    ops, thr = subset(a, "operator"), subset(a, "through")
+    ops.dwell_s = {z: sum(a.dwell_by_op.get(p.operator, {}).get(z, 0) for p in ops.paths) for z in a.dwell_s}
+    main = subset(a, "operator", a.main_operators or None)
+    spag = draw_spaghetti(base, thr, single_colour=THROUGH_COLOUR, thickness=max(1, round(max(w, h) / 900)),
+                          markers=False)
     return {
-        "combined": combined,
-        "heatmap": draw_zones(heat_img, a, show_flows=False),
-        "spaghetti": draw_zones(draw_spaghetti(base, a), a),  # legend added after any crop
+        "combined": draw_zones(_heat_and_trails(base, a), a),
+        "operators": draw_zones(_heat_and_trails(base, ops), ops),
+        "through": draw_zones(_heat_and_trails(base, thr), thr, show_flows=False) if thr.paths else None,
+        "heatmap": draw_zones(draw_heatmap(base, heat_layer(a, (w, h))), a, show_flows=False),
+        "spaghetti": draw_zones(draw_spaghetti(spag, main), a),  # legend added after any crop
     }

@@ -10,6 +10,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from .boxes import container_mask
+
 
 def detect_circle(frames: list[np.ndarray]) -> tuple[float, float, float]:
     """Find the fisheye image circle (cx, cy, r) from a few frames (black surround)."""
@@ -186,7 +188,9 @@ class FisheyeBackend:
         for (k, a, _), tile, res in zip(self.active, tiles, results):
             if res.boxes is None:
                 continue
-            for (x1, y1, x2, y2), c in zip(res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy()):
+            xyxy = res.boxes.xyxy.cpu().numpy()
+            keep = container_mask(xyxy)
+            for (x1, y1, x2, y2), c in zip(xyxy[keep], res.boxes.conf.cpu().numpy()[keep]):
                 fx, fy, off = u.to_circle(k, (x1 + x2) / 2, y2 + a)
                 if abs(off) > half_core:
                     continue  # this person is owned by the neighbouring tile -> no duplicates

@@ -21,9 +21,9 @@ streamlit run app.py          # opens http://localhost:8501
 3. **Area to analyse** – include/exclude rectangles (% of image) or fisheye pie slices; live preview dims what is ignored
 4. Segments table: add rows `00:05:00 → 00:20:00`, `01:10:00 → 01:25:00` (skip breaks, changeovers)
 5. Background: **Empty floor** (median frame, operators removed) or the frame you scrubbed to
-6. **Operators working this area** – enter the headcount if known (best accuracy), else 0 = auto
+6. No headcount needed – crew size is **measured** from the footage. Optional: min. minutes in area to count as an operator (auto = 1.5 min or 40 % of analysed time)
 7. Run → **Download PDF** (+ track CSV, headcount CSV)
-8. **Check / name operators** – snapshot per track; type the same name to merge, a role ("Welder") to rename, `ignore` to drop (visitor, forklift) → Rebuild PDF in seconds, no video re-processing
+8. **Check / name people** – snapshot + auto role per track; same name = merge, a team name ("Warehouse", "Manager") groups them, `ignore` drops (forklift) → Rebuild PDF in seconds, no video re-processing
 
 ## Use – command line (batch / scheduled)
 ```bash
@@ -37,9 +37,9 @@ python heatmap_cli.py line3.mp4 --config examples/zones_example.json --page A3
 ## Output (`output/`)
 | File | Content |
 |---|---|
-| `*_operator_heatmap.pdf` | p1 heat + spaghetti, p2 heat map, p3 spaghetti (colour per operator + key), one page per operator, data page (operator table, headcount-over-time chart, zones, trips) |
+| `*_operator_heatmap.pdf` | Everyone · **Operators only** · **Through-traffic only** · heat map · spaghetti (operators colour, through-traffic grey) · one page per main operator · data page (crew size, passes/h, person table, headcount chart, zones, trips) |
 | `*_combined/heatmap/spaghetti.png` | Same images for PowerPoint/A3 boards |
-| `*_tracks.csv` | operator, track_id, time, foot x/y – pivot in Excel/Power BI |
+| `*_tracks.csv` | person, role (operator / through), track_id, time, foot x/y – pivot in Excel/Power BI |
 | `*_headcount.csv` | people visible per sampled frame – staffing / congestion |
 
 ## Zones + metres (optional, `examples/zones_example.json`)
@@ -49,6 +49,7 @@ python heatmap_cli.py line3.mp4 --config examples/zones_example.json --page A3
 
 ## Area isolation (speed + accuracy)
 - `include` = only analyse here; `exclude` = always ignore (office glass, TV screens, walkway outside the cell, mezzanine)
+- `entry` = doorway / aisle inside the view where people walk in and out (helps through-traffic detection)
 - Shapes: `rect` [left%, top%, right%, bottom%] · `sector` [from°, to°, inner%, outer%] (fisheye, 0° = 12 o'clock, clockwise) · `poly` [[x,y],…] px
 - Can also live in the zones config as `"roi": {...}`
 - Speed: fixed cams crop to the area before detection; fisheye skips tiles/rows outside it. Measured 30 s fisheye clip: 99 s full view → 60 s for a 140° slice
@@ -60,10 +61,15 @@ python heatmap_cli.py line3.mp4 --config examples/zones_example.json --page A3
 | BoT-SORT tracker + appearance ReID, 8 s lost-track memory | operators crossing, short occlusion |
 | ID-swap splitter (sudden clothing-colour change inside a track) | tracker swaps two people at a crossing |
 | Stitching (walkable gap + matching clothing colour, ≤ 15 s) | hidden behind racking/pillar, missed detections |
-| Headcount hint `--operators N` | merges leftovers until N people (never merges two people seen at the same time) |
+| **Operator vs through-traffic** (no headcount needed) | long time in area = operator; short visit that starts AND ends at the view edge / selection edge / `entry` zone = through-traffic (warehouse, other lines, managers); short track that starts or ends mid-floor = lost piece of an operator → rejoined |
+| Re-entry | same-looking people never on screen together = one person who left and came back |
+| Crew size measured | operators on screen at once: typical / 95 % / peak – no count to enter |
+| Optional `--operators N` | if you ever do know the count, merges operators down to N |
 | Manual names in the app | final say; merge / rename / ignore |
 
-Test (synthetic, 4 real-person sprites, crossings + pillar): raw tracker 40 IDs → auto 8 operators @ 98 % purity → with `--operators 4`: exactly 4 @ 98 %.
+Tests (synthetic, real-person sprites, crossings + pillar, **no headcount given**):
+- 4 operators: 40 raw IDs → 5 operators @ 96 % purity, crew measured typical 3 / peak 4, 0 through-traffic
+- 3 operators + 6 walk-through passes: 73 raw IDs → role accuracy 97 %, 7 passes counted (truth 6), crew typical 2 / peak 3
 Use the `yolo` detector for multi-operator work; `motion` cannot tell people apart (needs `--operators`).
 
 ## How it works

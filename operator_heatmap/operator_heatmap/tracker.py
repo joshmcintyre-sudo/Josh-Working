@@ -15,6 +15,7 @@ from typing import Callable, Iterator
 import cv2
 import numpy as np
 
+from .boxes import container_mask
 from .fisheye import FisheyeBackend, crop_circle, detect_circle
 from .projection import EquirectDewarper, View360
 
@@ -149,9 +150,12 @@ class YoloBackend:
                                tracker=self.tracker_cfg, verbose=False, device=self.device)[0]
         if res.boxes is None or res.boxes.id is None:
             return []
+        xyxy = res.boxes.xyxy.cpu().numpy()
+        keep = container_mask(xyxy)
         out = []
-        for (x1, y1, x2, y2), tid in zip(res.boxes.xyxy.cpu().numpy(), res.boxes.id.int().cpu().numpy()):
-            out.append((int(tid), (x1 + x2) / 2, y2, x2 - x1, y2 - y1))
+        for (x1, y1, x2, y2), tid, k in zip(xyxy, res.boxes.id.int().cpu().numpy(), keep):
+            if k:
+                out.append((int(tid), (x1 + x2) / 2, y2, x2 - x1, y2 - y1))
         return out
 
 

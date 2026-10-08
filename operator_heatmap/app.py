@@ -74,11 +74,11 @@ st.caption("Ignore parts of the view that confuse the count (offices, walkways o
            "reflections) - and the smaller the area, the faster the analysis. Live preview below.")
 a1, a2 = st.columns(2)
 with a1:
-    st.markdown("**Rectangles** - % of the image, 0,0 = top-left")
+    st.markdown("**Rectangles** - % of the image, 0,0 = top-left. `entry` = doorway / aisle people walk in and out of")
     rects = st.data_editor(
         st.session_state.get("rects", pd.DataFrame(columns=["use", "left %", "top %", "right %", "bottom %"])),
         num_rows="dynamic", key="rects_ed", width="stretch",
-        column_config={"use": st.column_config.SelectboxColumn("Use", options=["include", "exclude"], required=True),
+        column_config={"use": st.column_config.SelectboxColumn("Use", options=["include", "exclude", "entry"], required=True),
                        **{c: st.column_config.NumberColumn(c, min_value=0, max_value=100)
                           for c in ["left %", "top %", "right %", "bottom %"]}})
 with a2:
@@ -87,14 +87,14 @@ with a2:
         st.markdown("**Pie slices** - 0 deg = 12 o'clock, clockwise; radius % from centre to edge")
         sectors = st.data_editor(
             sectors, num_rows="dynamic", key="sectors_ed", width="stretch",
-            column_config={"use": st.column_config.SelectboxColumn("Use", options=["include", "exclude"], required=True),
+            column_config={"use": st.column_config.SelectboxColumn("Use", options=["include", "exclude", "entry"], required=True),
                            "from deg": st.column_config.NumberColumn(min_value=0, max_value=360),
                            "to deg": st.column_config.NumberColumn(min_value=0, max_value=360),
                            "inner %": st.column_config.NumberColumn(min_value=0, max_value=100),
                            "outer %": st.column_config.NumberColumn(min_value=0, max_value=100)})
     roi_file = st.file_uploader("...or upload area JSON (polygons in pixels)", type=["json"], key="roi_json")
 
-spec = {"include": [], "exclude": []}
+spec = {"include": [], "exclude": [], "entry": []}
 for r in rects.dropna().itertuples(index=False):
     spec[r[0]].append({"rect": [float(v) for v in r[1:5]]})
 for r in sectors.dropna().itertuples(index=False):
@@ -103,6 +103,7 @@ if roi_file is not None:
     extra = json.load(roi_file)
     spec["include"] += extra.get("include", [])
     spec["exclude"] += extra.get("exclude", [])
+    spec["entry"] += extra.get("entry", [])
 try:
     roi = ROI.from_spec(spec, src.size)
 except ValueError as e:
@@ -131,8 +132,10 @@ src.close()
 # ---------------------------------------------------------------- 4. settings
 st.header("4. Settings")
 s1, s2, s3, s4, s5 = st.columns(5)
-operators = s1.number_input("Operators working this area (0 = auto)", 0, 100, 0,
-                            help="If you know the headcount, broken tracks are merged until this many remain")
+resident_min = s1.number_input("Min. minutes in area to count as an operator (0 = auto)", 0.0, 120.0, 0.0, 0.5,
+                               help="Shorter visits that walk in and out = through-traffic (warehouse, other lines, "
+                                    "managers). Auto = 1.5 min or 40% of the analysed time, whichever is shorter")
+operators = 0  # headcount not needed - crew size is measured from the footage
 backend = s2.selectbox("Detector", ["yolo", "motion"],
                        help="yolo = AI person detection (best). motion = background subtraction (no AI, quick)")
 model = s3.selectbox("YOLO model", ["yolo11n.pt", "yolo11s.pt", "yolo11m.pt"],
@@ -154,7 +157,7 @@ def options() -> Options:
                    segments=seg_text, base_time=fmt_ts(scrub) if base_mode.startswith("This") else "",
                    backend=backend, model=model, sample_fps=sample_fps, config=cfg_path, page=page,
                    yaw=view.yaw, pitch=view.pitch, fov=view.fov, operators=int(operators),
-                   mount_height=mount_height, lens_fov=lens_fov,
+                   mount_height=mount_height, lens_fov=lens_fov, resident_min_s=resident_min * 60,
                    roi=json.dumps(spec) if roi is not None else "", crop_output=crop_output)
 
 
@@ -173,7 +176,10 @@ if st.button("Run analysis", type="primary"):
 if "tracks" in st.session_state:
     tr = st.session_state.tracks
     out = report(options(), tr, st.session_state.get("labels"))
-    st.success(f"{len(out['analysis'].paths)} operators identified from {len(out['tracklets'])} raw tracks")
+    an = out["analysis"]
+    st.success(f"Crew on floor: typical {an.crew['median']:.0f}, peak {an.crew['max']:.0f} operators  |  "
+               f"{an.through['passes']:.0f} through-traffic passes ({an.through['per_hour']:.0f}/h)  |  "
+               f"{len(out['tracklets'])} raw tracks")
     d1, d2, d3 = st.columns(3)
     with open(out["pdf"], "rb") as fh:
         d1.download_button("Download PDF", fh.read(), os.path.basename(out["pdf"]), "application/pdf", type="primary")
@@ -182,15 +188,17 @@ if "tracks" in st.session_state:
     with open(out["headcount_csv"], "rb") as fh:
         d3.download_button("Headcount CSV", fh.read(), os.path.basename(out["headcount_csv"]), "text/csv")
 
-    t1, t2, t3 = st.tabs(["Combined", "Heat map", "Spaghetti"])
-    for tab, key in ((t1, "combined"), (t2, "heatmap"), (t3, "spaghetti")):
+    keys = [k for k in ("combined", "operators", "through", "heatmap", "spaghetti") if k in out]
+    names = {"combined": "Everyone", "operators": "Operators", "through": "Through-traffic",
+             "heatmap": "Heat map", "spaghetti": "Spaghetti"}
+    for tab, key in zip(st.tabs([names[k] for k in keys]), keys):
         tab.image(out[key], width="stretch")
 
     # ------------------------------------------------------------ 6. relabel
     st.header("6. Check / name operators (optional)")
-    st.caption("Each raw track with a snapshot. Type the same name on tracks that are the same person to merge them, "
-               "a real name or role (e.g. 'Welder', 'Team lead'), or 'ignore' to drop a track "
-               "(visitor, forklift driver, false detection). Then click Rebuild PDF - no re-processing of the video.")
+    st.caption("Each raw track with a snapshot and its auto role. Type the same name on tracks that are the same "
+               "person to merge them, a role or team (e.g. 'Welder', 'Warehouse', 'Manager') to group them, or "
+               "'ignore' to drop a track (forklift, false detection). Then Rebuild PDF - no re-processing of the video.")
     rows = [r for r in out["tracklets"] if r["track"] in tr.thumbs and r["seen_s"] >= 1.0]
     edits = {}
     per_row = 6
@@ -198,7 +206,8 @@ if "tracks" in st.session_state:
         cols = st.columns(per_row)
         for col, r in zip(cols, rows[i:i + per_row]):
             col.image(cv2.cvtColor(tr.thumbs[r["track"]], cv2.COLOR_BGR2RGB),
-                      caption=f"#{r['track']}  {fmt_ts(r['start_s'])}-{fmt_ts(r['end_s'])}")
+                      caption=f"#{r['track']} {'🚶 through' if an.roles.get(r['operator']) == 'through' else '🔧 operator'} "
+                              f"{fmt_ts(r['start_s'])}-{fmt_ts(r['end_s'])}")
             edits[r["track"]] = col.text_input("Operator", st.session_state.get("labels", {}).get(r["track"], r["operator"]),
                                                key=f"lbl{r['track']}", label_visibility="collapsed")
     if st.button("Rebuild PDF with these names"):

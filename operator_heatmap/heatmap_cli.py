@@ -3,7 +3,7 @@
 
 Examples
   python heatmap_cli.py line3.mp4 --segments "00:05:00-00:20:00, 01:10:00-01:25:00"
-  python heatmap_cli.py roof360.mp4 --camera fisheye --mount-height 7.5 --operators 6
+  python heatmap_cli.py roof360.mp4 --camera fisheye --mount-height 7.5
   python heatmap_cli.py cell360.mp4 --camera 360 --yaw 90 --pitch -30 --fov 110
   python heatmap_cli.py line3.mp4 --config examples/zones_example.json --base-time 00:06:10
 """
@@ -32,7 +32,9 @@ def main():
     ap.add_argument("--pitch", type=float, default=-20.0)
     ap.add_argument("--fov", type=float, default=100.0)
     ap.add_argument("--min-track-s", type=float, default=2.0)
-    ap.add_argument("--operators", type=int, default=0, help="known headcount on the floor (0 = auto)")
+    ap.add_argument("--operators", type=int, default=0, help="optional: operators working the area (0 = auto)")
+    ap.add_argument("--resident-min-s", type=float, default=0.0,
+                    help="min seconds in area to count as an operator, else through-traffic (0 = auto)")
     ap.add_argument("--stitch-gap-s", type=float, default=15.0, help="max seconds hidden before a new ID")
     ap.add_argument("--imgsz", type=int, default=960, help="1280 for small/distant operators")
     ap.add_argument("--mount-height", type=float, default=0.0, help="fisheye lens height (m) -> metres walked")
@@ -59,7 +61,9 @@ def main():
     for k, v in out.items():
         if isinstance(v, str):
             print(f"{k:14s} {v}")
-    print(f"operators      {len(out['analysis'].paths)}")
+    an = out["analysis"]
+    print(f"crew on floor  typical {an.crew['median']:.0f}, peak {an.crew['max']:.0f}  |  "
+          f"through-traffic {an.through['passes']:.0f} passes ({an.through['per_hour']:.0f}/h)")
 
 
 if __name__ == "__main__":

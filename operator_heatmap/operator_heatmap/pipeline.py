@@ -18,7 +18,7 @@ from .analysis import analyse, load_config, resolve_identities, tracklet_table
 from .projection import View360
 from .report import build_pdf
 from .render import draw_legend, render_all, render_operators
-from .roi import ROI, preview
+from .roi import ROI, edge_distance, preview
 from .segments import parse_segments, parse_ts
 from .tracker import TrackResult, VideoSource, make_backend, track_video
 
@@ -42,7 +42,8 @@ class Options:
     pitch: float = -20.0
     fov: float = 100.0
     min_track_s: float = 2.0
-    operators: int = 0               # known headcount on the cell; 0 = auto
+    operators: int = 0               # optional: operators working the area; 0 = auto (measured from footage)
+    resident_min_s: float = 0.0      # min time in area to count as an operator, else through-traffic; 0 = auto
     stitch_gap_s: float = 15.0       # max hidden time (behind racking etc.) to rejoin a track
     mount_height: float = 0.0        # fisheye: lens height above floor in metres -> metres walked, no targets
     lens_fov: float = 180.0          # fisheye: lens field of view (Hikvision/Axis/Uniview ~180-187)
@@ -95,17 +96,21 @@ def load_tracks(o: Options) -> TrackResult:
 def report(o: Options, tr: TrackResult, labels: dict[int, str] | None = None) -> dict:
     stem = _stem(o)
     title = o.title or stem
-    mapping = resolve_identities(tr.points, tr.appearance, tr.view_size, n_operators=o.operators or None,
-                                 labels=labels, max_gap_s=o.stitch_gap_s)
+    roi = ROI.from_spec(getattr(tr, "roi_spec", None), tr.view_size)
+    analysed_s = sum(e - s for s, e in tr.segments)
+    res_min = o.resident_min_s or min(90.0, 0.4 * max(analysed_s, 1))
+    mapping, roles = resolve_identities(
+        tr.points, tr.appearance, tr.view_size, n_operators=o.operators or None, labels=labels,
+        max_gap_s=o.stitch_gap_s, edge_dist=edge_distance(tr.view_size, roi, tr.camera == "fisheye"),
+        analysed_s=analysed_s, resident_min_s=res_min, return_roles=True)
     zones, cal = load_config(o.config or None)
     if tr.camera == "fisheye" and o.mount_height > 0 and not cal.calibrated:
         cal.fisheye = {"R": tr.view_size[0] / 2, "height_m": o.mount_height,
                        "lens_fov_deg": o.lens_fov, "model": o.lens_model}
-    a = analyse(tr.points, o.sample_fps, zones, cal, mapping=mapping, min_seconds=o.min_track_s,
-                max_jump_px=max(tr.view_size) / 8)
-    roi = ROI.from_spec(getattr(tr, "roi_spec", None), tr.view_size)
+    a = analyse(tr.points, o.sample_fps, zones, cal, mapping=mapping, roles=roles, analysed_s=analysed_s,
+                resident_min_s=res_min, min_seconds=o.min_track_s, max_jump_px=max(tr.view_size) / 8)
     base = preview(tr.base_frame, roi)  # ignored areas dimmed, selection outlined
-    imgs = render_all(base, a)
+    imgs = {k: v for k, v in render_all(base, a).items() if v is not None}
     op_imgs = render_operators(base, a)
     if roi is not None and o.crop_output:
         x1, y1, x2, y2 = roi.bbox()
@@ -120,9 +125,10 @@ def report(o: Options, tr: TrackResult, labels: dict[int, str] | None = None) ->
     out["csv"] = os.path.join(o.out_dir, f"{stem}_tracks.csv")
     with open(out["csv"], "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["operator", "track_id", "time_s", "foot_x_px", "foot_y_px", "box_w", "box_h"])
+        w.writerow(["person", "role", "track_id", "time_s", "foot_x_px", "foot_y_px", "box_w", "box_h"])
         for p in tr.points:
-            w.writerow([mapping.get(p.track_id, "ignored/noise"), p.track_id, f"{p.t:.2f}",
+            who = mapping.get(p.track_id, "ignored/noise")
+            w.writerow([who, a.roles.get(who, roles.get(who, "")), p.track_id, f"{p.t:.2f}",
                         f"{p.x:.1f}", f"{p.y:.1f}", f"{p.w:.0f}", f"{p.h:.0f}"])
     out["headcount_csv"] = os.path.join(o.out_dir, f"{stem}_headcount.csv")
     with open(out["headcount_csv"], "w", newline="") as fh:
