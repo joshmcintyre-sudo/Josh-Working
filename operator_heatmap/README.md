@@ -4,7 +4,7 @@ Factory camera footage (fixed, 360 ceiling fisheye, or 360 panorama) with **mult
 
 ## Quick start (Windows)
 1. Download: https://github.com/joshmcintyre-sudo/Josh-Working/archive/refs/heads/ccr-6f07bd32-8ig2xl.zip → unzip
-2. Install Python 3.11+ from https://www.python.org/downloads/ (tick **Add python.exe to PATH**)
+2. Install Python from https://www.python.org/downloads/ (install manager: answer y, reboot), then in cmd: `py install 3.12`
 3. Open `operator_heatmap` → double-click **`run_windows.bat`** (first run installs, ~5–10 min) → browser opens at http://localhost:8501
 Mac/Linux: `./run_mac_linux.sh`
 

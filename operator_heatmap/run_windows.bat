@@ -8,9 +8,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+rem Prefer 3.12 / 3.13 (widest package support for YOLO, PyTorch, OpenCV), else newest installed
+set PYVER=-3
+py -3.12 --version >nul 2>nul && set PYVER=-3.12
+if "%PYVER%"=="-3" py -3.13 --version >nul 2>nul && set PYVER=-3.13
 if not exist .venv\Scripts\python.exe (
-  echo Creating Python environment...
-  py -3 -m venv .venv
+  echo Creating Python environment with py %PYVER% ...
+  py %PYVER% -m venv .venv
 )
 call .venv\Scripts\activate.bat
 if not exist .venv\installed.ok (
