@@ -24,7 +24,7 @@ streamlit run app.py          # opens http://localhost:8501
    - **Fixed camera**
    - **360 ceiling fisheye** – round image looking down (Hikvision/Axis/Uniview/Dahua fisheye). Enter mount height → metres walked with no floor targets
    - **360 panorama** (Insta360, GoPro Max) → slide yaw/pitch/FOV until the work area fills the preview
-3. **Area to analyse** – include/exclude rectangles (% of image) or fisheye pie slices; live preview dims what is ignored
+3. **Draw areas on the frame** – click/drag directly on the preview: Include (bronze), Exclude (grey hatch), Doorway (dashed white); Save/Load per camera
 4. Segments table: add rows `00:05:00 → 00:20:00`, `01:10:00 → 01:25:00` (skip breaks, changeovers)
 5. Background: **Empty floor** (median frame, operators removed) or the frame you scrubbed to
 6. No headcount needed – crew size is **measured** from the footage. Optional: min. minutes in area to count as an operator (auto = 1.5 min or 40 % of analysed time)
@@ -52,6 +52,18 @@ python heatmap_cli.py line3.mp4 --config examples/zones_example.json --page A3
 - `zones`: polygons (pixel coords of the analysed view) → **dwell min per zone** + **trips A→B** (arrows, thickness = trips)
 - `calibration`: 4 image points ↔ 4 floor points in metres (pallet corners, floor-tape) → **metres walked**, m/hour. Or `{"px_per_m": 85}`
 - Get pixel coords: open `*_combined.png` in Paint (bottom-left shows x,y) and hover
+
+## Naming people + per-person reports
+- After a run, **People** panel = one card per person (snapshot, minutes, tracks)
+- Type a name (e.g. `Josh`) → Apply names. Same name on two cards = merged. Team names group people. `ignore` drops
+- **Show people** filter → screen, PDF and CSVs for just those people (e.g. `..._Josh_operator_heatmap.pdf`)
+- Every named person gets their own page in the full PDF
+
+## Speed
+- Presets: Fast (3 fps, quick look), **Standard (5 fps, recommended)**, Detailed (5 fps, larger detector for small/far people)
+- Always skipped: black borders, excluded areas, and tiles with no movement (full re-check every 1 s; dwell is time-weighted so people standing still still count)
+- Test results: 90 s fisheye clip 7 min 17 s → 1 min 50 s; 2 min fixed clip 63 s → 43 s at the same accuracy
+- Fastest wins on your side: draw an Include area round the cell, Exclude offices/racking tops, analyse shorter segments
 
 ## Area isolation (speed + accuracy)
 - `include` = only analyse here; `exclude` = always ignore (office glass, TV screens, walkway outside the cell, mezzanine)

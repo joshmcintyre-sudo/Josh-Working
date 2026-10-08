@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* Utemaster brand: Rich Black / White / Black tints, Bronze accent */
+  body { margin: 0; background: #000; color: #fff; font-family: "Neue Montreal", "Aptos", "Segoe UI", sans-serif; font-size: 13px; }
+  .bar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  .bar .lbl { color: #999; margin: 0 2px 0 10px; font-family: "Beachwood", "Aptos Narrow", "Arial Narrow", sans-serif;
+              text-transform: uppercase; letter-spacing: .06em; font-size: 12px; }
+  .bar .lbl:first-child { margin-left: 0; }
+  button { border: 1px solid #666; background: #000; color: #fff; border-radius: 2px; padding: 3px 10px; cursor: pointer;
+           font-family: "Beachwood", "Aptos Narrow", "Arial Narrow", sans-serif; text-transform: uppercase;
+           letter-spacing: .06em; font-size: 12px; }
+  button:hover { border-color: #876044; }
+  button.use.on[data-use=include] { background: #876044; border-color: #876044; }
+  button.use.on[data-use=exclude] { background: #666; border-color: #666; }
+  button.use.on[data-use=entry] { background: #fff; color: #000; border-color: #fff; }
+  button.tool.on { background: #333; border-color: #ccc; }
+  canvas { max-width: 100%; display: block; border-radius: 2px; cursor: crosshair; }
+  .hint { color: #999; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="lbl">Draw:</span>
+  <button class="use on" data-use="include" title="Only analyse inside these areas">Include</button>
+  <button class="use" data-use="exclude" title="Always ignore (offices, walkways, reflections)">Exclude</button>
+  <button class="use" data-use="entry" title="Doorway / aisle people walk in and out of">Doorway</button>
+  <span class="lbl">Shape:</span>
+  <button class="tool on" data-tool="poly">Polygon</button>
+  <button class="tool" data-tool="rect">Rectangle</button>
+  <span class="lbl"></span>
+  <button id="undo">Undo</button>
+  <button id="clear">Clear all</button>
+</div>
+<canvas id="c"></canvas>
+<div class="hint" id="hint"></div>
+<script>
+// Minimal Streamlit component (no build step): talks the postMessage protocol directly.
+const COL = { include: [135, 96, 68], exclude: [153, 153, 153], entry: [255, 255, 255] };  // Bronze, Black 40, White
+let hatch = null;  // exclude areas: grey diagonal hatching
+const HINT = {
+  poly: "Click to add corners, double-click (or click the first corner) to finish. Esc cancels.",
+  rect: "Click and drag to draw a rectangle. Esc cancels."
+};
+const c = document.getElementById("c"), ctx = c.getContext("2d");
+let shapes = [], use = "include", tool = "poly", cur = [], drag = null, hover = null;
+let scale = 1, lastImg = null, img = new Image();
+
+const send = (type, extra) => window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, extra), "*");
+const setHeight = () => send("streamlit:setFrameHeight", { height: document.body.scrollHeight + 2 });
+const emit = () => send("streamlit:setComponentValue", {
+  dataType: "json",
+  value: shapes.map(s => ({ use: s.use, poly: s.pts.map(([x, y]) => [Math.round(x * scale), Math.round(y * scale)]) }))
+});
+
+function pos(e) {
+  const r = c.getBoundingClientRect();
+  return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height];
+}
+const px = () => c.width / c.getBoundingClientRect().width;  // canvas px per screen px
+const rgba = (k, a) => `rgba(${COL[k][0]},${COL[k][1]},${COL[k][2]},${a})`;
+
+function drawPoly(pts, k, closed) {
+  if (!pts.length) return;
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  pts.slice(1).forEach(p => ctx.lineTo(p[0], p[1]));
+  if (closed) {
+    ctx.closePath();
+    if (k === "exclude") {
+      if (!hatch) {
+        const t = document.createElement("canvas"); t.width = t.height = 12;
+        const g = t.getContext("2d"); g.fillStyle = "rgba(0,0,0,0.55)"; g.fillRect(0, 0, 12, 12);
+        g.strokeStyle = "rgba(204,204,204,0.8)"; g.lineWidth = 2; g.beginPath(); g.moveTo(0, 12); g.lineTo(12, 0); g.stroke();
+        hatch = ctx.createPattern(t, "repeat");
+      }
+      ctx.fillStyle = hatch;
+    } else ctx.fillStyle = rgba(k, k === "entry" ? 0.12 : 0.30);
+    ctx.fill();
+  }
+  ctx.lineWidth = 2.5 * px();
+  ctx.setLineDash(k === "entry" ? [10 * px(), 6 * px()] : []);
+  ctx.strokeStyle = rgba(k, 1);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function draw() {
+  if (!img.complete || !img.width) return;
+  ctx.drawImage(img, 0, 0);
+  if (shapes.some(s => s.use === "include")) {  // dim everything outside the include areas
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, c.width, c.height);
+    shapes.filter(s => s.use === "include").forEach(s => {
+      ctx.moveTo(s.pts[0][0], s.pts[0][1]);
+      s.pts.slice(1).forEach(p => ctx.lineTo(p[0], p[1]));
+      ctx.closePath();
+    });
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fill("evenodd");
+    ctx.restore();
+  }
+  shapes.forEach(s => drawPoly(s.pts, s.use, true));
+  if (cur.length) {
+    drawPoly(hover ? cur.concat([hover]) : cur, use, false);
+    cur.forEach((p, i) => {
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], (i ? 3 : 5) * px(), 0, 7);
+      ctx.fillStyle = rgba(use, 1);
+      ctx.fill();
+    });
+  }
+  if (drag && hover) {
+    const [x0, y0] = drag, [x1, y1] = hover;
+    drawPoly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], use, true);
+  }
+}
+
+function finishPoly() {
+  if (cur.length >= 3) { shapes.push({ use, pts: cur }); emit(); }
+  cur = []; draw();
+}
+
+c.addEventListener("mousedown", e => { if (tool === "rect") { drag = pos(e); hover = drag; } });
+c.addEventListener("mousemove", e => { hover = pos(e); if (cur.length || drag) draw(); });
+c.addEventListener("mouseup", e => {
+  if (tool !== "rect" || !drag) return;
+  const [x0, y0] = drag, [x1, y1] = pos(e);
+  drag = null;
+  if (Math.abs(x1 - x0) > 4 * px() && Math.abs(y1 - y0) > 4 * px()) {
+    shapes.push({ use, pts: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] });
+    emit();
+  }
+  draw();
+});
+c.addEventListener("click", e => {
+  if (tool !== "poly") return;
+  const p = pos(e);
+  if (cur.length >= 3 && Math.hypot(p[0] - cur[0][0], p[1] - cur[0][1]) < 10 * px()) return finishPoly();
+  const last = cur[cur.length - 1];
+  if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 2 * px()) cur.push(p);  // ignore dblclick duplicate
+  draw();
+});
+c.addEventListener("dblclick", e => { if (tool === "poly") finishPoly(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { cur = []; drag = null; draw(); } });
+
+document.querySelectorAll("button.use").forEach(b => b.onclick = () => {
+  use = b.dataset.use;
+  document.querySelectorAll("button.use").forEach(x => x.classList.toggle("on", x === b));
+  draw();
+});
+document.querySelectorAll("button.tool").forEach(b => b.onclick = () => {
+  tool = b.dataset.tool; cur = []; drag = null;
+  document.querySelectorAll("button.tool").forEach(x => x.classList.toggle("on", x === b));
+  document.getElementById("hint").textContent = HINT[tool];
+  draw();
+});
+document.getElementById("undo").onclick = () => { if (cur.length) cur.pop(); else { shapes.pop(); emit(); } draw(); };
+document.getElementById("clear").onclick = () => { shapes = []; cur = []; emit(); draw(); };
+document.getElementById("hint").textContent = HINT[tool];
+
+window.addEventListener("message", e => {
+  const d = e.data;
+  if (!d || d.type !== "streamlit:render") return;
+  const a = d.args;
+  scale = a.scale || 1;
+  const incoming = (a.shapes || []).map(s => ({ use: s.use, pts: s.poly.map(([x, y]) => [x / scale, y / scale]) }));
+  if (JSON.stringify(incoming.map(s => s.pts.map(p => p.map(Math.round))))
+      !== JSON.stringify(shapes.map(s => s.pts.map(p => p.map(Math.round))))) shapes = incoming;  // loaded / cleared from Python
+  if (a.image !== lastImg) {
+    lastImg = a.image;
+    img = new Image();
+    img.onload = () => { c.width = img.width; c.height = img.height; draw(); setHeight(); };
+    img.src = a.image;
+  } else draw();
+});
+window.addEventListener("resize", () => { setHeight(); draw(); });
+send("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

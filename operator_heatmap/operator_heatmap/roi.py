@@ -50,17 +50,20 @@ class ROI:
     include: list[np.ndarray] = field(default_factory=list)
     exclude: list[np.ndarray] = field(default_factory=list)
     entries: list[np.ndarray] = field(default_factory=list)  # doorways / aisles people walk in and out of
+    valid: np.ndarray | None = None  # camera picture area (black borders = 0), always applied
 
     @classmethod
-    def from_spec(cls, spec: dict | str | None, size: tuple[int, int]) -> "ROI | None":
-        if not spec:
-            return None
+    def from_spec(cls, spec: dict | str | None, size: tuple[int, int],
+                  valid: np.ndarray | None = None) -> "ROI | None":
         if isinstance(spec, str):
-            spec = json.loads(spec)
+            spec = json.loads(spec) if spec else None
+        spec = spec or {}
+        if valid is not None and valid.min() > 0:
+            valid = None  # no black borders
         roi = cls(size, [_shape_to_poly(s, size) for s in spec.get("include", [])],
                   [_shape_to_poly(s, size) for s in spec.get("exclude", [])],
-                  [_shape_to_poly(s, size) for s in spec.get("entry", [])])
-        return roi if roi.include or roi.exclude or roi.entries else None
+                  [_shape_to_poly(s, size) for s in spec.get("entry", [])], valid)
+        return roi if roi.include or roi.exclude or roi.entries or valid is not None else None
 
     @property
     def mask(self) -> np.ndarray:
@@ -71,6 +74,8 @@ class ROI:
                 cv2.fillPoly(m, [p.astype(np.int32)], 255)
             for p in self.exclude:
                 cv2.fillPoly(m, [p.astype(np.int32)], 0)
+            if self.valid is not None:
+                m &= self.valid
             self._mask = m
         return self._mask
 

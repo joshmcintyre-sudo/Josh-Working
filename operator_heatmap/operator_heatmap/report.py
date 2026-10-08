@@ -17,11 +17,28 @@ from .analysis import Analysis
 from .segments import fmt_ts
 
 PAGE_SIZES = {"A4": landscape(A4), "A3": landscape(A3)}
+# Official Utemaster wordmark (black, for white pages) copied from Box into ../assets - never redrawn
+LOGO_PDF = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets",
+                        "Utemaster_Wordmark_Primary_Black.png")
+
+
+def _logo(c: canvas.Canvas, page: tuple[float, float]):
+    """Wordmark top-right: 65 mm wide on A3, 45 mm on A4 (brand sizing guide)."""
+    if not os.path.exists(LOGO_PDF):
+        return
+    from reportlab.lib.utils import ImageReader
+    pw, ph = page
+    w = (65 if pw > 1000 else 45) * mm
+    img = ImageReader(LOGO_PDF)
+    iw, ih = img.getSize()
+    h = w * ih / iw
+    c.drawImage(img, pw - 12 * mm - w, ph - 12 * mm - h + 6, w, h, mask="auto")
 
 
 def _image_page(c: canvas.Canvas, img: np.ndarray, title: str, subtitle: str, page: tuple[float, float], tmp: str):
     pw, ph = page
     m = 12 * mm
+    _logo(c, page)
     c.setFont("Helvetica-Bold", 16)
     c.drawString(m, ph - m - 4, title)
     c.setFont("Helvetica", 9)
@@ -32,7 +49,7 @@ def _image_page(c: canvas.Canvas, img: np.ndarray, title: str, subtitle: str, pa
     path = os.path.join(tmp, f"{abs(hash(title))}.jpg")
     cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 92])
     ih, iw = img.shape[:2]
-    box_w, box_h = pw - 2 * m, ph - 2 * m - 30
+    box_w, box_h = pw - 2 * m, ph - 2 * m - 30 - (10 * mm if os.path.exists(LOGO_PDF) else 0)
     s = min(box_w / iw, box_h / ih)
     w, h = iw * s, ih * s
     c.drawImage(path, (pw - w) / 2, m + (box_h - h) / 2, w, h)
@@ -68,13 +85,13 @@ def build_pdf(out_path: str, images: dict[str, np.ndarray], a: Analysis, meta: d
     c.setTitle(f"Operator movement - {meta['title']}")
     with tempfile.TemporaryDirectory() as tmp:
         thr = a.through
-        pages = (("combined", "Everyone - heat map + paths", sub),
+        pages = (("spaghetti", "Spaghetti diagram - one colour per person, through-traffic grey", sub),
+                 ("combined", "Everyone - heat map + paths", sub),
                  ("operators", "Operators working the area", sub + f"  |  crew on floor: typical {a.crew['median']:.0f}, "
                                                                   f"peak {a.crew['max']:.0f}"),
                  ("through", "Through-traffic (passing through, e.g. warehouse, other lines, managers)",
                   sub + f"  |  {thr['passes']:.0f} passes, {thr['per_hour']:.0f}/h, avg {thr['avg_s']:.0f} s in area"),
-                 ("heatmap", "Dwell heat map - everyone", sub),
-                 ("spaghetti", "Spaghetti diagram - operators in colour, through-traffic grey", sub))
+                 ("heatmap", "Dwell heat map - everyone", sub))
         for key, title, subtitle in pages:
             if key not in images:
                 continue
@@ -88,6 +105,7 @@ def build_pdf(out_path: str, images: dict[str, np.ndarray], a: Analysis, meta: d
 
     # ---- data page
     m = 12 * mm
+    _logo(c, size)
     c.setFont("Helvetica-Bold", 16)
     c.drawString(m, ph - m - 4, f"{meta['title']} - movement data")
     c.setFont("Helvetica", 9)
@@ -196,10 +214,10 @@ def _table(c, rows, x, y_top, widths) -> float:
     t.setStyle(TableStyle([
         ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
         ("FONT", (0, 1), (-1, -1), "Helvetica", 9),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#222222")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#000000")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f0f0")]),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#bbbbbb")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F2F2")]),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CCCCCC")),
     ]))
     _, h = t.wrapOn(c, 0, 0)
     t.drawOn(c, x, y_top - h)

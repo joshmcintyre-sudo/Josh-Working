@@ -3,3 +3,12 @@ maxUploadSize = 8192   # MB - factory clips are big
 
 [browser]
 gatherUsageStats = false
+
+# Utemaster brand: Rich Black + White, Bronze accent only for the main call to action
+[theme]
+base = "dark"
+primaryColor = "#876044"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#333333"
+textColor = "#FFFFFF"
+borderColor = "#666666"

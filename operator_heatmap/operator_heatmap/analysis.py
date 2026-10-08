@@ -282,6 +282,15 @@ class Path:
     t: np.ndarray
     xy: np.ndarray            # (N, 2) image px
     pieces: list[np.ndarray]  # path split at gaps/teleports -> what gets drawn
+    w: np.ndarray | None = None  # seconds each sample represents (time to next sample, capped at gaps)
+
+    def weights(self, dt: float, max_gap_s: float = 2.0) -> np.ndarray:
+        """Time-weighted samples: someone standing still may only be re-detected once a second
+        (motion gating), so each detection counts for the time until the next one."""
+        if self.w is None:
+            gaps = np.diff(self.t)
+            self.w = np.append(np.where(gaps <= max_gap_s, gaps, dt), dt)
+        return self.w
 
     @property
     def duration(self) -> float:
@@ -301,6 +310,7 @@ class Analysis:
     crew: dict[str, float] = field(default_factory=dict)  # operators on screen at once: median / p95 / max
     through: dict[str, float] = field(default_factory=dict)  # passes, passes per hour, avg seconds per pass
     main_operators: list[str] = field(default_factory=list)  # operators present long enough for their own page
+    colour_index: dict[str, int] = field(default_factory=dict)  # person -> fixed colour on every image
     distance_m: dict[str, float] = field(default_factory=dict)
     dwell_by_op: dict[str, dict[str, float]] = field(default_factory=dict)
     active_s: dict[str, float] = field(default_factory=dict)
@@ -350,14 +360,15 @@ def analyse(points: list[TrackPoint], sample_fps: float, zones: list[Zone],
     on_screen = defaultdict(set)
     for path in paths:
         if a.roles[path.operator] == "operator":
-            for t in path.t:
-                on_screen[round(t * sample_fps)].add(path.operator)
+            for t, w in zip(path.t, path.weights(dt)):  # fill the time until the next detection
+                for b in range(round(t * sample_fps), round((t + w) * sample_fps)):
+                    on_screen[b].add(path.operator)
     counts = np.array([len(v) for v in on_screen.values()]) if on_screen else np.zeros(1)
     a.crew = {"median": float(np.median(counts)), "p95": float(np.percentile(counts, 95)), "max": float(counts.max())}
 
     thr = [p for p in paths if a.roles[p.operator] == "through"]
     n_pass = roles.get("_passes", len(thr))
-    thr_s = sum(len(p.t) * dt for p in thr)
+    thr_s = sum(float(p.weights(dt).sum()) for p in thr)
     a.through = {"passes": n_pass, "people": len(thr),
                  "per_hour": n_pass / max(analysed_s / 3600, 1e-9) if analysed_s else 0.0,
                  "avg_s": thr_s / n_pass if n_pass else 0.0, "total_s": thr_s}
@@ -370,7 +381,9 @@ def analyse(points: list[TrackPoint], sample_fps: float, zones: list[Zone],
                 dist += float(np.linalg.norm(np.diff(floor, axis=0), axis=1).sum())
         if cal.calibrated:
             a.distance_m[path.operator] = dist
-        a.active_s[path.operator] = len(path.t) * dt
+        a.active_s[path.operator] = float(path.weights(dt).sum())
+    a.colour_index = {n: i for i, n in enumerate(sorted(
+        (p.operator for p in paths), key=lambda n: (a.roles[n] != "operator", -a.active_s.get(n, 0))))}
     a.main_operators = [p.operator for p in paths if a.roles[p.operator] == "operator"
                         and a.active_s[p.operator] >= min(resident_min_s, 0.4 * max(analysed_s, 1))]
 
@@ -380,11 +393,11 @@ def analyse(points: list[TrackPoint], sample_fps: float, zones: list[Zone],
         for path in paths:
             last = None
             mine = a.dwell_by_op.setdefault(path.operator, defaultdict(float))
-            for x, y in path.xy:
+            for (x, y), w in zip(path.xy, path.weights(dt)):
                 z = next((z.name for z in zones if z.contains(x, y)), None)
                 if z:
-                    dwell[z] += dt
-                    mine[z] += dt
+                    dwell[z] += w
+                    mine[z] += w
                     if last and z != last:
                         flows[(last, z)] += 1  # walked from zone `last` to zone `z`
                     last = z

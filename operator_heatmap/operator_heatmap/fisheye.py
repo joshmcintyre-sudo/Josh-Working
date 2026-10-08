@@ -129,6 +129,31 @@ class SimpleTracker:
         return out
 
 
+class MotionGate:
+    """Cheap change detector on a 1/8-size grey frame. Returns (motion mask, full_check_due)."""
+    SCALE = 8
+
+    def __init__(self, sample_fps: float, refresh_s: float = 1.0, thresh: int = 18):
+        self.every = max(1, round(sample_fps * refresh_s))
+        self.thresh, self.prev, self.i = thresh, None, -1
+
+    def __call__(self, frame: np.ndarray) -> tuple[np.ndarray, bool]:
+        self.i += 1
+        h, w = frame.shape[:2]
+        small = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (w // self.SCALE + 1, h // self.SCALE + 1),
+                           interpolation=cv2.INTER_AREA)
+        small = cv2.GaussianBlur(small, (3, 3), 0)
+        if self.prev is None or self.prev.shape != small.shape:
+            self.prev = small
+            return np.ones_like(small, bool), True
+        motion = cv2.dilate((cv2.absdiff(small, self.prev) > self.thresh).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        self.prev = small
+        return motion, self.i % self.every == 0
+
+    def reset(self):
+        self.prev, self.i = None, -1
+
+
 class FisheyeBackend:
     """YOLO on unwrapped tiles -> foot points on the circle -> SimpleTracker."""
 
@@ -144,6 +169,8 @@ class FisheyeBackend:
         self.tracker: SimpleTracker | None = None
         self.roi_mask: np.ndarray | None = None
         self.active: list[tuple[int, int, int]] = []  # (tile, first row, last row) actually processed
+        self.gate = MotionGate(sample_fps)
+        self.last_full = True  # True when every tile was checked this frame (used for headcount)
 
     def set_roi(self, mask: np.ndarray):
         self.roi_mask = mask
@@ -163,10 +190,20 @@ class FisheyeBackend:
                 continue
             head = int(0.3 * u.th)  # feet in the area, body extends outward (= up in the tile)
             self.active.append((k, max(0, rows[0] - head), min(u.th, rows[-1] + 20)))
+        # low-res footprint of each tile on the circle, for motion gating
+        size = int(2 * u.R)
+        self.footprints = []
+        for k, a, b in self.active:
+            fp = np.zeros((size // MotionGate.SCALE + 1, size // MotionGate.SCALE + 1), bool)
+            xs = np.clip(u.maps[k][0][a:b] / MotionGate.SCALE, 0, fp.shape[1] - 1).astype(int)
+            ys = np.clip(u.maps[k][1][a:b] / MotionGate.SCALE, 0, fp.shape[0] - 1).astype(int)
+            fp[ys, xs] = True
+            self.footprints.append(fp)
 
     def reset(self):
         if self.tracker:
             self.tracker.reset()
+        self.gate.reset()
 
     def __call__(self, frame: np.ndarray):
         R = frame.shape[0] / 2
@@ -179,13 +216,27 @@ class FisheyeBackend:
         if not self.active:
             return []
         u = self.unwrap
-        tiles = [cv2.remap(frame, u.maps[k][0][a:b], u.maps[k][1][a:b], cv2.INTER_LINEAR) for k, a, b in self.active]
-        imgsz = min(self.imgsz, 32 * int(np.ceil(max(u.tw, max(b - a for _, a, b in self.active)) / 32)))
+        # motion gating: only run the detector on tiles where something moved (or a tracked person is
+        # walking); every tile is re-checked once a second so people standing still are not lost
+        motion, full = self.gate(frame)
+        moving = [t["pos"] / MotionGate.SCALE for t in self.tracker.tracks.values()
+                  if t["lost"] <= 2 and np.linalg.norm(t["vel"]) > 0.004 * u.R]
+        todo = []
+        for (k, a, b), fp in zip(self.active, self.footprints):
+            hot = full or bool((motion & fp).any()) or any(
+                fp[min(int(y), fp.shape[0] - 1), min(int(x), fp.shape[1] - 1)] for x, y in moving)
+            if hot:
+                todo.append((k, a, b))
+        self.last_full = len(todo) == len(self.active)
+        if not todo:
+            return [(tid, d["pos"][0], d["pos"][1], d["wh"][0], d["wh"][1], d["crop"]) for tid, d in self.tracker.update([])]
+        tiles = [cv2.remap(frame, u.maps[k][0][a:b], u.maps[k][1][a:b], cv2.INTER_LINEAR) for k, a, b in todo]
+        imgsz = min(self.imgsz, 32 * int(np.ceil(max(u.tw, max(b - a for _, a, b in todo)) / 32)))
         results = self.model.predict(tiles, classes=[0], conf=self.conf, imgsz=imgsz,
                                      verbose=False, device=self.device)
         dets = []
         half_core = u.core / 2
-        for (k, a, _), tile, res in zip(self.active, tiles, results):
+        for (k, a, _), tile, res in zip(todo, tiles, results):
             if res.boxes is None:
                 continue
             xyxy = res.boxes.xyxy.cpu().numpy()

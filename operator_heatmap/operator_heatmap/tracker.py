@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from .boxes import container_mask
-from .fisheye import FisheyeBackend, crop_circle, detect_circle
+from .fisheye import FisheyeBackend, MotionGate, crop_circle, detect_circle
 from .projection import EquirectDewarper, View360
 
 
@@ -41,6 +41,11 @@ class TrackResult:
     view_size: tuple[int, int] = (0, 0)  # (w, h)
     camera: str = "fixed"
     roi_spec: dict | None = None  # area isolation used for this run
+    valid_png: bytes | None = None  # non-black picture area (PNG-encoded mask)
+
+    @property
+    def valid_mask(self) -> np.ndarray | None:
+        return None if self.valid_png is None else cv2.imdecode(np.frombuffer(self.valid_png, np.uint8), 0)
     appearance: dict[int, np.ndarray] = field(default_factory=dict)  # track -> mean clothing colour histogram
     thumbs: dict[int, np.ndarray] = field(default_factory=dict)      # track -> best crop (BGR) for relabelling
     snapshots: dict[int, dict] = field(default_factory=dict)         # track -> {3 s slot: (t, area, crop)}
@@ -135,17 +140,23 @@ class YoloBackend:
         from ultralytics import YOLO  # lazy: only needed for this backend
         self.model = YOLO(model)
         self.conf, self.device, self.imgsz = conf, device, imgsz
+        self.gate = MotionGate(sample_fps)
+        self.last_full = True
         fd, self.tracker_cfg = tempfile.mkstemp(suffix=".yaml")
         with open(fd, "w") as fh:  # keep lost tracks alive `lost_s` seconds -> survives pillars, forklifts
             fh.write(TRACKER_YAML.format(kind=tracker, buffer=max(30, int(lost_s * sample_fps)),
                                          reid=tracker == "botsort"))
 
     def reset(self):
+        self.gate.reset()
         pred = getattr(self.model, "predictor", None)
         for trk in getattr(pred, "trackers", None) or []:
             trk.reset()
 
-    def __call__(self, frame: np.ndarray) -> list[tuple[int, float, float, float, float]]:
+    def __call__(self, frame: np.ndarray) -> list[tuple[int, float, float, float, float]] | None:
+        motion, full = self.gate(frame)
+        if not full and not motion.any():
+            return None  # nothing moved since the last frame -> skip the detector (re-checked every second)
         res = self.model.track(frame, persist=True, classes=[0], conf=self.conf, imgsz=self.imgsz,
                                tracker=self.tracker_cfg, verbose=False, device=self.device)[0]
         if res.boxes is None or res.boxes.id is None:
@@ -290,7 +301,22 @@ def split_id_switches(res: TrackResult, window: int = 5, thresh: float = 0.35):
         p.hist = None  # keep the cache small
 
 
-def empty_floor(source: VideoSource, segments: list[tuple[float, float]], n: int = 31) -> np.ndarray:
+def valid_area(source: VideoSource, n: int = 8) -> np.ndarray:
+    """255 where the camera actually shows picture, 0 for black borders (fisheye corners, letterbox bars,
+    the part of a clipped fisheye circle outside the frame). Analysing only this is faster."""
+    frames = [source.frame_at((k + 0.5) / n * max(source.duration - 0.1, 0.1)) for k in range(n)]
+    mx = np.max(np.stack([cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames]), axis=0)
+    m = (mx > 16).astype(np.uint8) * 255
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((7, 7), np.uint8))
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((25, 25), np.uint8))
+    num, lab, stats, _ = cv2.connectedComponentsWithStats(m)
+    if num > 1:  # keep the big picture region(s), drop specks (burnt-in timestamps etc.)
+        big = [i for i in range(1, num) if stats[i, cv2.CC_STAT_AREA] > 0.02 * m.size]
+        m = np.isin(lab, big).astype(np.uint8) * 255 if big else m
+    return m
+
+
+def empty_floor(source: VideoSource, segments: list[tuple[float, float]], n: int = 15) -> np.ndarray:
     """Median of frames spread over the segments -> background photo with operators removed."""
     total = sum(e - s for s, e in segments)
     frames = []
@@ -324,6 +350,11 @@ def track_video(source: VideoSource, segments: list[tuple[float, float]], backen
             if roi is not None:  # black out ignored areas + crop to the selection -> fewer pixels to process
                 frame = np.where(m3, frame[y0:y1, x0:x1], 0).astype(np.uint8)
             dets = backend(frame)
+            res.frames_analysed += 1
+            if progress:
+                progress(min(1.0, (done + t - s) / total))
+            if dets is None:  # skipped (no movement)
+                continue
             kept = 0
             for d in dets:
                 tid, x, y, w, h = d[:5]
@@ -336,10 +367,8 @@ def track_video(source: VideoSource, segments: list[tuple[float, float]], backen
                 gid = tid + id_offset
                 res.points.append(TrackPoint(gid, t, x, y, w, h, _update_appearance(res, gid, crop, t)))
                 max_id = max(max_id, tid)
-            res.headcount.append((t, kept))
-            res.frames_analysed += 1
-            if progress:
-                progress(min(1.0, (done + t - s) / total))
+            if getattr(backend, "last_full", True):  # only frames where the whole area was checked
+                res.headcount.append((t, kept))
         done += e - s
         id_offset += max_id + 1  # IDs never collide across segments
     split_id_switches(res)

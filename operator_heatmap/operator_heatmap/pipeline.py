@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import pickle
 from dataclasses import dataclass
 from typing import Callable
@@ -20,7 +21,7 @@ from .report import build_pdf
 from .render import draw_legend, render_all, render_operators
 from .roi import ROI, edge_distance, preview
 from .segments import parse_segments, parse_ts
-from .tracker import TrackResult, VideoSource, make_backend, track_video
+from .tracker import TrackResult, VideoSource, make_backend, track_video, valid_area
 
 
 @dataclass
@@ -78,9 +79,11 @@ def track(o: Options, progress: Callable[[float], None] | None = None) -> TrackR
         name = "fisheye" if o.camera == "fisheye" and o.backend == "yolo" else o.backend
         backend = make_backend(name, model=o.model, conf=o.conf, imgsz=o.imgsz, sample_fps=o.sample_fps,
                                n_tiles=o.tiles)
-        roi = ROI.from_spec(roi_spec(o), src.size)
+        valid = valid_area(src)  # skip black borders -> faster
+        roi = ROI.from_spec(roi_spec(o), src.size, valid)
         tr = track_video(src, segs, backend, o.sample_fps, base_t, progress, roi)
         tr.roi_spec = roi_spec(o)
+        tr.valid_png = cv2.imencode(".png", valid)[1].tobytes()
     finally:
         src.close()
     with open(os.path.join(o.out_dir, f"{_stem(o)}_tracks.pkl"), "wb") as fh:
@@ -93,16 +96,30 @@ def load_tracks(o: Options) -> TrackResult:
         return pickle.load(fh)
 
 
-def report(o: Options, tr: TrackResult, labels: dict[int, str] | None = None) -> dict:
+AUTO_NAME = re.compile(r"^(Operator|Through-traffic) \d+$")
+
+
+def report(o: Options, tr: TrackResult, labels: dict[int, str] | None = None,
+           people: list[str] | None = None) -> dict:
+    """people: only include these people (e.g. ["Josh"]) -> PDF, images and stats for just them."""
     stem = _stem(o)
     title = o.title or stem
-    roi = ROI.from_spec(getattr(tr, "roi_spec", None), tr.view_size)
+    roi = ROI.from_spec(getattr(tr, "roi_spec", None), tr.view_size, getattr(tr, "valid_mask", None))
     analysed_s = sum(e - s for s, e in tr.segments)
     res_min = o.resident_min_s or min(90.0, 0.4 * max(analysed_s, 1))
     mapping, roles = resolve_identities(
         tr.points, tr.appearance, tr.view_size, n_operators=o.operators or None, labels=labels,
         max_gap_s=o.stitch_gap_s, edge_dist=edge_distance(tr.view_size, roi, tr.camera == "fisheye"),
         analysed_s=analysed_s, resident_min_s=res_min, return_roles=True)
+    all_people = sorted(set(mapping.values()))
+    full_mapping = dict(mapping)
+    full_roles = dict(roles)
+    if people:
+        roles = dict(roles)
+        roles["_passes"] = sum(1 for n in set(people) if roles.get(n) == "through")
+        title = f"{title} - {', '.join(people)}"
+        stem = f"{stem}_" + re.sub(r"[^A-Za-z0-9]+", "-", "_".join(people)).strip("-")
+        mapping = {t: n for t, n in mapping.items() if n in people}
     zones, cal = load_config(o.config or None)
     if tr.camera == "fisheye" and o.mount_height > 0 and not cal.calibrated:
         cal.fisheye = {"R": tr.view_size[0] / 2, "height_m": o.mount_height,
@@ -111,9 +128,12 @@ def report(o: Options, tr: TrackResult, labels: dict[int, str] | None = None) ->
                 resident_min_s=res_min, min_seconds=o.min_track_s, max_jump_px=max(tr.view_size) / 8)
     base = preview(tr.base_frame, roi)  # ignored areas dimmed, selection outlined
     imgs = {k: v for k, v in render_all(base, a).items() if v is not None}
-    op_imgs = render_operators(base, a)
-    if roi is not None and o.crop_output:
-        x1, y1, x2, y2 = roi.bbox()
+    named = [p.operator for p in a.paths if not AUTO_NAME.match(p.operator)]  # anyone you named gets a page
+    pages_for = list(people) if people else list(dict.fromkeys(a.main_operators + named))
+    op_imgs = render_operators(base, a, [n for n in pages_for if n in {p.operator for p in a.paths}])
+    crop = roi.bbox() if roi is not None and o.crop_output else None
+    if crop is not None:
+        x1, y1, x2, y2 = crop
         imgs = {k: v[y1:y2, x1:x2] for k, v in imgs.items()}
         op_imgs = {k: v[y1:y2, x1:x2] for k, v in op_imgs.items()}
     imgs["spaghetti"] = draw_legend(imgs["spaghetti"], a)
@@ -141,7 +161,11 @@ def report(o: Options, tr: TrackResult, labels: dict[int, str] | None = None) ->
                                     "sample_fps": o.sample_fps, "headcount": tr.headcount},
               o.page, op_imgs)
     out["mapping"] = mapping
-    out["tracklets"] = tracklet_table(tr.points, mapping)
+    out["people"] = all_people
+    out["roles"] = full_roles
+    out["base"] = base
+    out["crop"] = crop
+    out["tracklets"] = tracklet_table(tr.points, full_mapping)
     out["analysis"] = a
     return out
 
