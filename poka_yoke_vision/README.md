@@ -24,7 +24,7 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 21 tests: vision, learn→verify workflow, orders, QC, log, Box/webhook export: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 29 tests: vision, learn→verify, orders, QC, log, export, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
 ```
 
 ## Operator workflow (`/`) - scan order first
@@ -43,6 +43,21 @@ python -m pytest -q tests                                      # 21 tests: visio
 - **Barcode scanning:** any USB keyboard-wedge scanner (e.g. Zebra DS2208, Honeywell Voyager 1250g). Fields auto-focus; the scanner's Enter advances. Symbology prefixes (e.g. `]C1W234566`) are stripped. Order format is set by `order_types` / `order_pattern`.
 - Model barcode scanned in learn mode is remembered against the board.
 - Learn tips: hands out of view on each CAPTURE; one fastener type at a time with its qty (qty > 1 = counted); **Wrong area - retry**; **Undo last part**.
+
+## Camera as barcode scanner
+
+The overhead camera reads barcodes too, so a hand scanner is optional.
+- **Order screen:** camera scanning starts automatically. Hold the despatch paperwork / order label under the camera → reads `W234566` / `S98993` → beeps → moves to the model step. Only valid order codes are accepted here.
+- **Model screen:** reads the model barcode on the board or kit label → loads the board. Order codes are ignored here.
+- **Secondary QC:** QC can hold their badge barcode under the camera to fill QC initials.
+- **Board label check** (`qr_autoselect: true`): during verify, any barcode/QR on the board that belongs to a different board flags **WRONG BOARD**; with no board selected it auto-selects.
+- Reads Code 128, Code 39, QR, DataMatrix, EAN/UPC (via `zxing-cpp`; without it, QR only). Small labels are retried at 2x.
+- Same code is ignored for 3 s so one label can't trigger twice. **Stop camera** / **Scan with camera** toggles it per screen.
+- Settings: `camera_scan` (show it), `camera_scan_auto` (start automatically), `scan_fps` (default 5).
+- **Label size (the main limit):** the camera sees the whole board, so each pixel covers roughly *board width ÷ image width* (1200 mm ÷ 1280 px ≈ 0.9 mm; at 1920 px ≈ 0.6 mm). Decoders need ~2 px per narrow bar / QR cell.
+  - Flat on the board: use **QR codes ≥ 50 mm** (or ≥ 35 mm at 1920x1080). A 7-character Code 128 lying on the board would need to be ~250 mm wide.
+  - Paperwork / order labels: **hold the sheet up toward the camera** (half the distance = double the resolution). A standard 60–80 mm Code 128 order label reads when held ~30–40 cm below a camera mounted 1 m up. Adding a QR code of the order number to the despatch printout makes this easier.
+  - Matte label stock (gloss glares); keep labels flat and square to the camera. A hand scanner stays the fastest option for small 1D labels.
 
 ## Order log (`/log`)
 
@@ -119,7 +134,7 @@ Point `results_dir` in `settings.json` at a network share / OneDrive / Box Drive
 | `auto_stop_pass_seconds` | 2 | auto-confirm once PASS holds this long (0 = operator presses CONFIRM) |
 | `learn_repeats` | 3 | full-board reference captures in learn mode (more = fewer false fails) |
 | `pass_message` / `fail_message` | see file | operator prompts on the result screen |
-| `qr_autoselect` | false | `true` = read a QR code on the board (text = Board ID); auto-selects board and flags mismatch |
+| `qr_autoselect` | false | `true` = read a barcode/QR label on the board (Board ID or a learned model barcode); auto-selects board and flags mismatch |
 | `results_dir` | results | can be a network share; in JSON escape backslashes: `"\\\\server\\share\\py-results"` |
 | `order_types` / `order_pattern` | W, S / `^[A-Z]\\d{4,10}$` | order prefixes and format |
 | `qc_must_differ` | true | QC person must differ from operator |

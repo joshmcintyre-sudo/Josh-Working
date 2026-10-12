@@ -17,7 +17,8 @@
   <input id="order" class="scan" placeholder="W234566 / S98993" autocomplete="off">
   <input id="operator" class="scan small" placeholder="Operator initials" autocomplete="off">
   <button class="cta huge" id="orderNext">Next</button>
-  <p class="hint">System idle. Camera off. W = work order, S = sales order.</p>
+  <div class="camscan" data-cam="order"><img alt=""><div class="camline"><span class="camstate">Camera scanner off</span><button class="camtoggle">Scan with camera</button></div></div>
+  <p class="hint">Scan with the hand scanner, or hold the order barcode under the camera. W = work order, S = sales order.</p>
 </section>
 
 <!-- 2. MODEL -->
@@ -31,6 +32,7 @@
     <button class="cta huge" id="verifyBtn" disabled>Verify board</button>
     <button class="huge" id="learnBtn" disabled>Learn mode</button>
   </div>
+  <div class="camscan" data-cam="model"><img alt=""><div class="camline"><span class="camstate">Camera scanner off</span><button class="camtoggle">Scan with camera</button></div></div>
   <button class="ghost" id="toIdle2">Cancel order</button>
 </section>
 
@@ -86,6 +88,7 @@
     <p>QC has physically checked the board against the order and every item is present.</p>
     <input id="qcBy" class="scan small" placeholder="QC initials / scan badge" autocomplete="off">
     <input id="qcNote" class="scan small" placeholder="Note (optional)" autocomplete="off">
+    <div class="camscan" data-cam="qc"><img alt=""><div class="camline"><span class="camstate">Camera scanner off</span><button class="camtoggle">Scan with camera</button></div></div>
     <div class="row"><button class="cta" id="qcConfirm">Mark physically confirmed</button><button class="ghost" id="qcCancel">Cancel</button></div>
   </div>
   <div class="row"><button class="huge" id="nextOrder">Next order</button></div>
@@ -113,7 +116,8 @@ function show(name) {
   $("frame").className = "frame";
   $("crumbs").innerHTML = [ctx.order && `${esc(ctx.order.order_label)} <b>${esc(ctx.order.order_ref)}</b>`,
     ctx.board && ctx.board.board_id && esc(ctx.board.board_id), ctx.operator && "Op " + esc(ctx.operator)].filter(Boolean).join("  /  ");
-  clearInterval(poll); poll = null; clearInterval(liveTimer); liveTimer = null;
+  clearInterval(poll); poll = null; clearInterval(liveTimer); liveTimer = null; camOff(false);
+  if (CFG.camera_scan_auto && (name === "idle" || name === "model")) camOn(name === "idle" ? "order" : "model");
   const focus = {idle: "order", model: "model"}[name];
   if (focus) { $(focus).value = ""; $(focus).focus(); }
 }
@@ -246,9 +250,11 @@ function showResult(s) {
   (pass || qc ? $("nextOrder") : $("recheck")).focus();
 }
 $("recheck").onclick = () => startVerify();
-$("qcOpen").onclick = () => { $("failActions").hidden = true; $("qcBox").hidden = false; $("qcBy").value = ""; $("qcNote").value = ""; $("qcBy").focus(); };
-$("qcCancel").onclick = () => { $("qcBox").hidden = true; $("failActions").hidden = false; };
+$("qcOpen").onclick = () => { $("failActions").hidden = true; $("qcBox").hidden = false; $("qcBy").value = ""; $("qcNote").value = ""; $("qcBy").focus();
+  if (CFG.camera_scan_auto) camOn("qc"); };
+$("qcCancel").onclick = () => { camOff(true); $("qcBox").hidden = true; $("failActions").hidden = false; };
 async function qcConfirm() {
+  camOff(true);
   try { await api("/api/qc", {qc_by: $("qcBy").value, note: $("qcNote").value}); $("error").style.display = "none"; showResult(await api("/api/status")); }
   catch (e) { fail(e); $("qcBy").focus(); }
 }
@@ -256,8 +262,57 @@ $("qcConfirm").onclick = qcConfirm;
 onEnter("qcBy", () => $("qcNote").focus()); onEnter("qcNote", qcConfirm);
 $("nextOrder").onclick = () => { ctx.board = null; ctx.order = null; show("idle"); };
 
+/* ---------- camera as barcode scanner ---------- */
+// order screen: accepts W/S order codes only; model: a known board barcode (or any non-order code);
+// qc: badge / initials barcode. Same code is ignored for 3 s so one label can't double-fire.
+const cam = {purpose: null, seq: 0, timer: null, last: "", lastAt: 0};
+function camEl(p) { return document.querySelector(`.camscan[data-cam="${p}"]`); }
+function camUi(p, on, text) {
+  const el = camEl(p); if (!el) return;
+  el.classList.toggle("on", on);
+  el.querySelector("img").src = on ? "/video.mjpg?" + Date.now() : "";
+  el.querySelector(".camstate").textContent = text || (on ? "Camera scanner on - hold barcode under camera" : "Camera scanner off");
+  el.querySelector(".camtoggle").textContent = on ? "Stop camera" : "Scan with camera";
+}
+async function camOn(purpose) {
+  if (!CFG.camera_scan) return;
+  cam.purpose = purpose; camUi(purpose, true);
+  try {
+    const r = await api("/api/scan", {on: true});
+    const now = await api("/api/scan"); cam.seq = now.seq;                 // ignore reads from before this screen
+    if (r.engine !== "zxing-cpp") camUi(purpose, true, "QR codes only - install zxing-cpp for 1D barcodes");
+  } catch (e) { camUi(purpose, false, "Camera unavailable: " + e.message); cam.purpose = null; return; }
+  clearInterval(cam.timer); cam.timer = setInterval(camPoll, 300);
+}
+function camOff(release) {
+  clearInterval(cam.timer); cam.timer = null;
+  if (cam.purpose) camUi(cam.purpose, false);
+  cam.purpose = null;
+  if (release) api("/api/scan", {on: false}).catch(() => {});
+}
+function beep() {
+  try { const a = new AudioContext(), o = a.createOscillator(); o.frequency.value = 1800; o.connect(a.destination);
+        o.start(); o.stop(a.currentTime + 0.12); } catch (e) {}
+}
+async function camPoll() {
+  let r; try { r = await api("/api/scan"); } catch (e) { return; }
+  if (r.seq === cam.seq || !cam.purpose) return;
+  cam.seq = r.seq;
+  const pick = {order: c => c.order, model: c => c.board_id || !c.order, qc: c => !c.order && !c.board_id}[cam.purpose];
+  const c = r.codes.find(pick);
+  if (!c || (c.text === cam.last && Date.now() - cam.lastAt < 3000)) return;
+  cam.last = c.text; cam.lastAt = Date.now(); beep();
+  if (cam.purpose === "order") { $("order").value = c.order.order_ref; orderNext(); }
+  else if (cam.purpose === "model") { await lookup(c.board_id || c.text).catch(fail); }
+  else if (cam.purpose === "qc") { $("qcBy").value = c.text; $("qcNote").focus(); }
+}
+document.querySelectorAll(".camscan").forEach(el => el.querySelector(".camtoggle").onclick = () =>
+  el.classList.contains("on") ? camOff(true) : camOn(el.dataset.cam));
+
+let CFG = {camera_scan: true, camera_scan_auto: true};
 $("operator").value = ctx.operator;
-show("idle");
+api("/api/config").then(c => { CFG = c; document.querySelectorAll(".camscan").forEach(el => el.hidden = !c.camera_scan); })
+  .finally(() => show("idle"));
 </script>
 </body>
 </html>

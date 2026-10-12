@@ -17,6 +17,7 @@ from .board import Component
 from .inspector import Inspector, annotate
 from .learn import LearnSession
 from .orders import parse_order
+from . import scanner
 from .station import FileCamera, Station
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +40,9 @@ DEFAULTS = {
     "order_types": {"W": "Work order", "S": "Sales order"},
     "order_pattern": "^[A-Z]\\d{4,10}$",
     "qc_must_differ": True,
+    "camera_scan": True,          # show "scan with camera" on order / model / QC screens
+    "camera_scan_auto": True,     # start camera scanning automatically on those screens
+    "scan_fps": 5,
     "export": {
         "retry_seconds": 60,
         "webhook": {"enabled": False, "url": "", "token": ""},
@@ -159,6 +163,33 @@ def create_app(station: Station) -> Flask:
             return err("Export not configured")
         st.exporter.flush()
         return jsonify({"ok": True})
+
+    @app.post("/api/scan")
+    def scan_onoff():
+        on = bool(request.get_json(force=True).get("on"))
+        try:
+            st.scan(on)
+        except Exception as e:
+            return err(str(e))
+        return jsonify({"mode": st.mode, "engine": scanner.available()})
+
+    @app.get("/api/scan")
+    def scan_read():
+        """Latest camera barcode read. Each code is tagged as an order and/or a known model board."""
+        r = dict(st.scan_result)
+        codes = []
+        for c in r["codes"]:
+            try:
+                order = parse_order(c["text"], st.s["order_types"], st.s["order_pattern"])
+            except ValueError:
+                order = None
+            codes.append({**c, "order": order, "board_id": st.lib.lookup(c["text"])})
+        return jsonify({"seq": r["seq"], "age": round(time.time() - r["at"], 2) if r["at"] else None,
+                        "codes": codes, "mode": st.mode, "engine": scanner.available()})
+
+    @app.get("/api/config")
+    def config():
+        return jsonify({k: st.s[k] for k in ("camera_scan", "camera_scan_auto", "station_name")})
 
     @app.post("/api/cancel")
     def cancel():

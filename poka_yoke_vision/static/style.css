@@ -127,3 +127,11 @@ tr.sel { background:#2A1F16 !important; }
   .pair { grid-template-columns:1fr; } .video { min-height:50vh; }
   header { flex-wrap:wrap; }
 }
+
+/* camera barcode scanner panel */
+.camscan { width:min(560px, 100%); border:1px solid var(--line); }
+.camscan img { display:none; width:100%; background:var(--utm-black); }
+.camscan.on img { display:block; min-height:120px; }
+.camscan.on { border-color:var(--utm-bronze); }
+.camline { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 10px; font-size:14px; color:var(--muted); text-align:left; }
+.camscan.on .camstate { color:var(--utm-white); }

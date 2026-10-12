@@ -19,6 +19,7 @@ from .export import Exporter
 from .inspector import InspectionResult, Inspector, annotate, component_status
 from .orderlog import OrderLog
 from .orders import parse_order
+from . import scanner
 
 
 class Camera:
@@ -100,7 +101,9 @@ class Station:
         self.last_record: dict | None = None
         self.error: str | None = None
         self._pass_since: float | None = None
-        self._qr = cv2.QRCodeDetector()
+        self.scan_result = {"seq": 0, "at": 0.0, "codes": []}
+        self._lookup_cache: dict[str, str | None] = {}
+        self._lookup_t = 0.0
         self.learn = None                     # LearnSession while in guided learn mode
         self.log = OrderLog(self.results_dir / "order_log.db")
         self.exporter = Exporter(settings, self.results_dir, self.log.set_export_status) \
@@ -119,10 +122,24 @@ class Station:
         if self.camera.read() is None:
             self.camera.open()
 
+    def scan(self, on: bool) -> None:
+        """Camera as barcode scanner (order / model / QC badge). Stays open into verify or learn."""
+        if self.mode in ("inspect", "preview"):
+            return
+        if on:
+            self._ensure_camera()
+            self.mode = "scan"
+            self._start_loop()
+        elif self.mode == "scan":
+            self.mode = "idle"
+            if self._thread:
+                self._thread.join(timeout=3)
+            self.camera.close()
+
     def preview(self, on: bool) -> None:
         if self.mode == "inspect":
             return
-        if on:
+        if on:                                 # from idle or scan (camera already open)
             self._ensure_camera()
             self.mode = "preview"
             self._start_loop()
@@ -155,6 +172,7 @@ class Station:
         self.history.clear()
         self.latest, self.last_file, self.error, self._pass_since = None, None, None, None
         self.last_record = None
+        self._last_img = None
         self._ensure_camera()
         self.mode = "inspect"
         self._start_loop()
@@ -183,9 +201,9 @@ class Station:
         self._thread.start()
 
     def _loop(self):
-        period = 1.0 / max(0.2, float(self.s["fps"]))
-        while self.mode in ("preview", "inspect"):
+        while self.mode in ("preview", "inspect", "scan"):
             t0 = time.time()
+            period = 1.0 / max(0.2, float(self.s["scan_fps"] if self.mode == "scan" else self.s["fps"]))
             frame = self.camera.read()
             if frame is not None:
                 try:
@@ -197,39 +215,56 @@ class Station:
                 return
             time.sleep(max(0.0, period - (time.time() - t0)))
 
+    def _lookup(self, code: str) -> str | None:
+        """Barcode -> board_id, cached so per-frame label checks don't re-read every board file."""
+        if time.time() - self._lookup_t > 10:
+            self._lookup_cache, self._lookup_t = {}, time.time()
+        if code not in self._lookup_cache:
+            self._lookup_cache[code] = self.lib.lookup(code)
+        return self._lookup_cache[code]
+
     def _process(self, frame: np.ndarray):
+        if self.mode == "scan":
+            codes = scanner.decode(frame)
+            if codes:
+                with self._lock:
+                    self.scan_result = {"seq": self.scan_result["seq"] + 1, "at": time.time(), "codes": [
+                        {"text": c["text"], "format": c["format"]} for c in codes]}
+            self._publish(scanner.draw(frame, codes, "SCANNER - hold barcode under camera"), keep=False)
+            return
         if self.mode == "preview" or (self.inspector is None and not self.s.get("qr_autoselect")):
             self._publish(frame)
             return
-        qr_ok = None
-        if self.s.get("qr_autoselect"):
-            text, *_ = self._qr.detectAndDecode(frame)
-            text = (text or "").strip()
-            if text and text in self.lib.ids():
-                if text != self.board_id:
+        label_ok = None
+        if self.s.get("qr_autoselect"):     # board label check: any barcode/QR on the board that maps to a board
+            for c in scanner.decode(frame):
+                bid = self._lookup(c["text"])
+                if bid and bid != self.board_id:
                     if self.inspector is None:
-                        self.select_board(text)
+                        self.select_board(bid)
                     else:
-                        qr_ok = False   # label says a different board than the one selected
+                        label_ok = False   # label says a different board than the one selected
+                    break
         if self.inspector is None:
-            self._publish(frame, "Show board QR label to camera")
+            self._publish(frame, "Show board label to camera")
             return
-        res, view = self.inspector.inspect(frame, board_ok_override=qr_ok)
-        if qr_ok is False:
-            res.message = "WRONG BOARD - QR label does not match selected board"
+        res, view = self.inspector.inspect(frame, board_ok_override=label_ok)
+        if label_ok is False:
+            res.message = "WRONG BOARD - label does not match selected board"
         with self._lock:
             self.history.append(res)
             self.latest = self._stable()
         self._publish(annotate(view, self.latest))
 
-    def _publish(self, img: np.ndarray, text: str | None = None):
+    def _publish(self, img: np.ndarray, text: str | None = None, keep: bool = True):
         if text:
             img = img.copy()
             cv2.putText(img, text, (12, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 170, 255), 2)
         ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if ok:
             self.jpeg = buf.tobytes()
-            self._last_img = img
+            if keep:
+                self._last_img = img
 
     def _stable(self) -> InspectionResult:
         """Vote over the last N frames so a hand passing over the board doesn't flip the result."""

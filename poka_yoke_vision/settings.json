@@ -17,6 +17,9 @@
   "order_types": {"W": "Work order", "S": "Sales order"},
   "order_pattern": "^[A-Z]\\d{4,10}$",
   "qc_must_differ": true,
+  "camera_scan": true,
+  "camera_scan_auto": true,
+  "scan_fps": 5,
   "export": {
     "retry_seconds": 60,
     "webhook": {"enabled": false, "url": "https://your-app.example/api/pokayoke/results"},
