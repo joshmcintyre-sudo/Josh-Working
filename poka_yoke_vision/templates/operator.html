@@ -28,7 +28,6 @@
   <input id="model" class="scan" placeholder="Scan model barcode" autocomplete="off">
   <select id="modelList"><option value="">Or pick from list</option></select>
   <div id="modelCard" class="hint" style="font-size:20px"></div>
-  <div id="variantBox" class="variants" hidden></div>
   <div class="row">
     <button class="cta huge" id="verifyBtn" disabled>Verify board</button>
     <button class="huge" id="learnBtn" disabled>Learn mode</button>
@@ -164,23 +163,6 @@ async function showModel() {
   $("modelList").innerHTML = '<option value="">Or pick from list</option>' + list.map(b =>
     `<option value="${esc(b.board_id)}">${esc(b.product_line ? b.product_line + " / " : "")}${esc(b.name)} [${esc(b.board_id)}]</option>`).join("");
 }
-// Parts with colour variants (e.g. bracket black 95% / white): pick what THIS order needs, or accept any allowed.
-function renderVariants(list) {
-  const want = {};
-  String((ctx.launch && ctx.launch.variants) || "").split(",").forEach(p => { const [k, v] = p.split(":"); if (k && v) want[k.trim().toLowerCase()] = v.trim().toLowerCase(); });
-  $("variantBox").hidden = !list.length;
-  $("variantBox").innerHTML = list.length ? `<div class="step">Colour variant for this order</div>` + list.map(v => {
-    const pre = want[v.id.toLowerCase()] || want[v.label.toLowerCase()] || "";
-    return `<label>${esc(v.label)} <select data-variant="${esc(v.id)}">
-      <option value="">Any allowed (usually ${esc(v.usual)})</option>
-      ${v.options.map(o => `<option value="${esc(o)}" ${pre === o ? "selected" : ""}>${esc(o)} only</option>`).join("")}
-    </select></label>`; }).join("") : "";
-}
-function chosenVariants() {
-  const out = {};
-  document.querySelectorAll("#variantBox select").forEach(s => { if (s.value) out[s.dataset.variant] = s.value; });
-  return out;
-}
 async function lookup(code) {
   if (!code) return;
   const r = await api("/api/lookup?code=" + encodeURIComponent(code));
@@ -190,7 +172,6 @@ async function lookup(code) {
     : `<span class=warnText>Model "${esc(code)}" is new. Use learn mode to teach it.</span>`;
   $("verifyBtn").disabled = !r.taught; $("learnBtn").disabled = false;
   show("model"); $("model").value = code;
-  renderVariants(r.variants || []);
   (r.taught ? $("verifyBtn") : $("learnBtn")).focus();
 }
 onEnter("model", () => lookup($("model").value.trim()).catch(fail));
@@ -237,7 +218,7 @@ $("cancelLearn").onclick = () => confirm("Cancel learning? Nothing will be saved
 /* ---------- 4. verify ---------- */
 $("verifyBtn").onclick = () => startVerify();
 async function startVerify() {
-  try { await api("/api/start", {board_id: ctx.board.board_id, order_ref: ctx.order.order_ref, operator: ctx.operator, launch: ctx.launch, variants: chosenVariants()}); }
+  try { await api("/api/start", {board_id: ctx.board.board_id, order_ref: ctx.order.order_ref, operator: ctx.operator, launch: ctx.launch}); }
   catch (e) { return fail(e); }
   show("verify"); $("video").src = "/video.mjpg?" + Date.now();
   $("banner").className = "banner idle"; $("banner").textContent = "Looking"; $("items").innerHTML = "";

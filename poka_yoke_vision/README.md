@@ -24,7 +24,7 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 156 tests: vision, lighting, colour/material/variants, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 152 tests: vision, lighting, colour/material/variants, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
 ```
 
 ## Operator workflow (`/`) - scan order first
@@ -160,11 +160,7 @@ Point `results_dir` in `settings.json` at a network share / OneDrive / Box Drive
 Each part can be set to what it always looks like: **steel** (zinc, bright metal), **black** (rubber, black-oxide, black plastic), **white** (plastic, cable ties, labels), **bag** (clear or printed), **colour** (a coloured part: hue learned) or **auto**. Learn mode suggests it from the camera; the engineer screen has a Material column.
 - **Wrong part:** something is in the pocket but it's the wrong colour → **WRONG PART? Door seal should be black, this looks white**. It's never accepted as present, and never mislabelled as plain missing.
 - **Hands / rags / stray objects** in a pocket don't count as the part. When counting, each blob must be mostly the right material, so a fingertip next to 4 bolts still reads 4/6.
-- **Colour variants:** a part can have an usual material plus allowed variants, e.g. a bracket that is **black 95% of the time, occasionally white** = material `black`, variant `white`.
-  - By default either is accepted; the white one shows **"Mounting bracket LH: OK (white variant)"** and the result records `variant: white`.
-  - When the order needs a specific one, pick it on the model screen ("Colour variant for this order"), or pass it from Ops Hub in the launch link: `&variants=Mounting bracket LH:white`. The wrong one then shows **"WRONG PART? Mounting bracket LH should be white for this order, this looks black"**.
-  - A colour that isn't allowed at all (e.g. bare zinc) is WRONG PART either way.
-  - Set it in learn mode ("Also comes in") or the engineer screen's Variants column (e.g. `white`).
+- **Colour variants:** a part can have an usual material plus an allowed variant, e.g. a bracket that is **black 95% of the time, occasionally white** = material `black`, variant `white`. Either passes; the white one shows **"Mounting bracket LH: OK (white variant)"** and the record has `variant: white`. A colour that isn't allowed (e.g. bare zinc) is WRONG PART ("should be black or white, this looks grey"). Set it in learn mode ("Also comes in") or the engineer screen's Variants column.
 - Colour limits follow each part's own taught colour, so shadows and exposure changes don't flip black to grey or white to grey. A white part that blows out under glare still counts as white.
 - Boards taught before this feature are colour-learned automatically on load (material = auto until set).
 - Tested in `tests/test_colour.py`: white seal for black, black bracket for zinc, zinc bolts for black, red bag for blue, black ties for white (also under dim, warm, gradient, shadow and exposure changes); a hand in an empty pocket; a fingertip among bolts.

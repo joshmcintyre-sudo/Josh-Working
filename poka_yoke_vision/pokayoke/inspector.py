@@ -141,11 +141,8 @@ def component_status(c: Component, found: int, score: float) -> ComponentResult:
 
 def wrong_part(c: Component, seen: list[float] | None, score: float, want: str | None = None) -> ComponentResult:
     usual = c.material if c.material in colour.RULED and c.material != "colour" else colour.describe(c.colour_lab)
-    if want and want != c.material:
-        want_txt = f"{want} for this order" if " or " not in want else want
-    else:
-        want_txt = usual
-    msg = f"WRONG PART? {c.label} should be {want_txt}, this looks {colour.describe(seen)}"
+    accepted = " or ".join([usual] + list(c.alt_materials))          # e.g. "black or white"
+    msg = f"WRONG PART? {c.label} should be {accepted}, this looks {colour.describe(seen)}"
     return ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "WRONG_PART", round(score, 3), msg, c.roi)
 
 
@@ -158,7 +155,6 @@ class Inspector:
             raise ValueError(f"Board {board.board_id} has no reference image - teach it first")
         self.empty = board.empty()
         self.base = self.refs[0]
-        self.variants: dict[str, str] = {}      # component id -> material this check requires (from the order)
         # Align on the bare board when we have it: its features don't change when parts go missing.
         self.aligner = Aligner(self.empty if self.empty is not None else self.base) if board.align else None
         # Bare-board area (outside every part box): confirms the right board and measures the lighting.
@@ -259,7 +255,7 @@ class Inspector:
         if c.material not in colour.RULED:
             return fg
         lab = _lab(cv2.GaussianBlur(patch, (3, 3), 0))
-        allowed = self._allowed(c) if hasattr(self, "variants") else [c.material]
+        allowed = self._allowed(c)
         rule = np.zeros(fg.shape, bool)
         for m in allowed:                                  # any allowed variant counts (black or zinc bolts...)
             r = colour.class_mask(lab, m, c.colour_lab if m == c.material else None)
@@ -279,13 +275,12 @@ class Inspector:
 
     # ---- per component checks
     def _allowed(self, c: Component) -> list[str]:
-        """Materials accepted on this check: the one the order asks for, else the usual one + its variants."""
-        want = self.variants.get(c.id)
-        return [want] if want else [c.material] + list(c.alt_materials)
+        """Accepted materials: the usual one plus its allowed variants (e.g. black, or white)."""
+        return [c.material] + list(c.alt_materials)
 
     def _presence(self, c: Component, live: np.ndarray):
-        """-> (found, score, info); info may hold 'variant' (allowed non-usual variant seen) or 'wrong'
-        (median colour of a wrong part) + 'want' (what was expected)."""
+        """-> (found, score, info); info may hold 'variant' (an allowed non-usual colour was seen, e.g. white)
+        or 'wrong' (median colour of a wrong part) + 'want' (the accepted colours)."""
         p = _crop(live, c.roi)
         d_full = min(_patch_dist(p, _crop(r, c.roi)) for r in self.refs)
         if self.empty is not None:
@@ -309,17 +304,15 @@ class Inspector:
                     wrong = seen
         elif something_there and colour.distance(seen, c.colour_lab) > colour.PROFILE_TOL.get(c.material, 45):
             found, wrong = 0, seen
-        if found and c.material in allowed:
+        if found:
             return found, score, {}
-        if found:                                                  # usual part there, but this order wants a variant
-            return 0, score, {"wrong": c.colour_lab, "want": allowed[0]}
         # 2) an allowed variant (e.g. the white version of a usually-black bracket)
         fg = _fg_mask(p, e, min(c.fg_level, SOMETHING)) > 0
         lab = _lab(cv2.GaussianBlur(p, (3, 3), 0))
         for m in [m for m in allowed if m != c.material]:
             if (fg & colour.class_mask(lab, m)).sum() >= 0.5 * c.ref_fg_area:
                 return c.expected_count, score, {"variant": m}
-        if wrong is not None or (something_there and set(allowed) != {c.material}):
+        if wrong is not None or (something_there and c.alt_materials):
             return 0, score, {"wrong": seen, "want": " or ".join(allowed)}
         return 0, score, {}
 

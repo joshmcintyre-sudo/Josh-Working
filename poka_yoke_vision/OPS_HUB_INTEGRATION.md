@@ -33,7 +33,6 @@ Ops Hub MES checklist (browser, logged in)          Station PC (this app, http:/
 - `pokayoke://launch?...` links start the app if it isn't running (`install_windows.bat` registers this and starts the app at login).
 - Every record carries `launch_id` and `launch` {checklist, step, model, source}. Events: `started`, `completed`, `qc_confirmed` (a re-check sends another `completed`; latest wins).
 - **Return to Ops Hub** button on the result screen.
-- Optional `&variants=<part label or id>:<black|white|steel>` (comma-separated) on the launch link makes a colour variant mandatory for that order, e.g. `variants=Mounting bracket LH:white` when the order is for the white bracket. Without it, any allowed variant passes and the record says which (`variant`). Ops Hub can fill this later from the NetSuite order/assembly item.
 
 Station settings (now set in `settings.json`; Ops Hub build commit `7a60d1ac`, 12/10/2026):
 ```json

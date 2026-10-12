@@ -130,10 +130,6 @@ tr.sel { background:#2A1F16 !important; }
   header { flex-wrap:wrap; }
 }
 
-/* colour variant pickers */
-.variants { display:flex; flex-direction:column; gap:8px; align-items:center; border:1px solid var(--utm-bronze); padding:12px 18px; }
-.variants label { flex-direction:row; align-items:center; gap:10px; font-size:14px; color:var(--utm-white); }
-
 /* camera barcode scanner panel */
 .camscan { width:min(560px, 100%); border:1px solid var(--line); }
 .camscan img { display:none; width:100%; background:var(--utm-black); }
