@@ -95,11 +95,15 @@ class Exporter:
     def targets(self) -> list[str]:
         return [t for t, on in (("webhook", self.webhook), ("box", self.box)) if on]
 
-    def enqueue(self, record: dict, json_path: Path, image_path: Path | None) -> str:
-        targets = self.targets()
+    def enqueue(self, record: dict, json_path: Path, image_path: Path | None, only: list[str] | None = None) -> str:
+        targets = [t for t in self.targets() if only is None or t in only]
         if not targets:
             return "not configured"
-        job = {"record_id": record["record_id"], "json": str(json_path),
+        # snapshot the payload: the source JSON is rewritten later (e.g. by a QC confirmation)
+        snap = self.dir / "payload" / f"{record['record_id']}.json"
+        snap.parent.mkdir(exist_ok=True)
+        shutil.copyfile(json_path, snap)
+        job = {"record_id": record["record_id"], "json": str(snap),
                "image": str(image_path) if image_path else None,
                "done": {t: False for t in targets}, "attempts": 0, "last_error": None}
         (self.dir / "pending" / f"{record['record_id']}.json").write_text(json.dumps(job, indent=2))
@@ -144,10 +148,13 @@ class Exporter:
                 self.box.put(ip)
         elif target == "webhook":
             parts = [("record", jp.name, jp.read_bytes(), "application/json")]
-            if ip:
+            if ip and self.webhook.get("send_image", True):
                 parts.append(("image", ip.name, ip.read_bytes(), "image/jpeg"))
             body, ctype = _multipart(parts)
-            hdr = {"Authorization": f"Bearer {self.webhook['token']}"} if self.webhook.get("token") else {}
+            hdr = dict(self.webhook.get("headers") or {})
+            if self.webhook.get("token"):      # e.g. token_header "x-pokayoke-key" for a Supabase edge function
+                th = self.webhook.get("token_header") or "Authorization"
+                hdr[th] = self.webhook["token"] if th != "Authorization" else f"Bearer {self.webhook['token']}"
             code, resp = _post(self.webhook["url"], body, ctype, hdr)
             if not 200 <= code < 300:
                 raise RuntimeError(f"webhook {code}: {resp[:200]!r}")

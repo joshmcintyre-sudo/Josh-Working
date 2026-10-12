@@ -22,7 +22,8 @@
   "scan_fps": 5,
   "export": {
     "retry_seconds": 60,
-    "webhook": {"enabled": false, "url": "https://your-app.example/api/pokayoke/results"},
+    "webhook": {"enabled": false, "url": "https://<ops-hub-project>.supabase.co/functions/v1/pokayoke-ingest",
+                "token_header": "x-pokayoke-key", "send_started": true, "send_image": true},
     "box": {"enabled": false, "folder_id": "", "subject_type": "enterprise"}
   }
 }

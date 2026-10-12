@@ -31,6 +31,7 @@ class _Fake(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         _Fake.calls.append((self.path, self.headers.get("Authorization"), body))
+        _Fake.last_headers = {k.lower(): v for k, v in self.headers.items()}
         if self.path == "/oauth2/token":
             self._reply(200, {"access_token": "T0K", "expires_in": 3600})
         elif self.path == "/api/2.0/files/content":
@@ -97,12 +98,16 @@ def test_fail_then_secondary_qc_confirm_logged_and_exported(station):
 
     st.exporter.flush()
     paths = [p for p, *_ in _Fake.calls]
-    assert paths.count("/hook") == 2                       # camera record + QC record
+    hooks = [b for p, _, b in _Fake.calls if p == "/hook"]
+    events = [json.loads(b.split(b"\r\n\r\n", 1)[1].split(b"\r\n--", 1)[0])["event"] for b in hooks]
+    assert sorted(events) == ["completed", "qc_confirmed", "started"]   # order logged, camera result, QC stamp
+    assert len({json.loads(b.split(b"\r\n\r\n", 1)[1].split(b"\r\n--", 1)[0])["session_id"] for b in hooks}) == 1
     uploads = [b for p, _, b in _Fake.calls if p == "/api/2.0/files/content"]
     assert len(uploads) == 3                               # record json + image + QC json
     assert b'"parent": {"id": "777"}' in uploads[0] and b"W234566_DEMO-HILUX-01_" in uploads[0]
     assert all(a == "Bearer T0K" for p, a, _ in _Fake.calls if p == "/api/2.0/files/content")
     assert all(a == "Bearer abc" for p, a, _ in _Fake.calls if p == "/hook")
+    assert sum(b"filename=\"W234566_" in b and b"image/jpeg" in b for b in hooks) == 1    # image only on camera record
     assert not list((st.results_dir / "outbox" / "pending").glob("*.json"))
     assert c.get("/api/log?q=W234566").get_json()[0]["export_status"].startswith("sent")
 
@@ -114,5 +119,18 @@ def test_pass_needs_no_qc_and_export_retries_when_offline(station):
     assert rec["result"] == "PASS" and rec["order_type"] == "SALES_ORDER"
     assert c.post("/api/qc", json={"qc_by": "AB"}).status_code == 400
     st.exporter.flush()
-    assert len(list((st.results_dir / "outbox" / "pending").glob("*.json"))) == 1   # kept for retry
+    assert len(list((st.results_dir / "outbox" / "pending").glob("*.json"))) == 2   # started + completed kept for retry
     assert "retrying" in c.get("/api/log").get_json()[0]["export_status"]
+
+
+def test_webhook_custom_key_header(station):
+    st, cam, c = station
+    st.exporter.webhook.update({"token_header": "x-pokayoke-key", "headers": {"x-station": "PY-1"}})
+    st.exporter.box = None
+    _Fake.calls = []
+    _run(c, cam, demo.kitted(demo.bare_board()))
+    st.exporter.flush()
+    assert _Fake.calls and all(p == "/hook" for p, *_ in _Fake.calls)
+    srv_headers = _Fake.last_headers
+    assert srv_headers["x-pokayoke-key"] == "abc" and srv_headers["x-station"] == "PY-1"
+    assert "authorization" not in srv_headers

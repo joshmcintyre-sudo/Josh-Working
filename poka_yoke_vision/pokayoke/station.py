@@ -7,6 +7,7 @@ import json
 import platform
 import threading
 import time
+import uuid
 from collections import Counter, deque
 from datetime import datetime
 from pathlib import Path
@@ -106,7 +107,8 @@ class Station:
         self._lookup_t = 0.0
         self.learn = None                     # LearnSession while in guided learn mode
         self.log = OrderLog(self.results_dir / "order_log.db")
-        self.exporter = Exporter(settings, self.results_dir, self.log.set_export_status) \
+        self.exporter = Exporter(settings, self.results_dir,
+                                 lambda rid, st: self.log.set_export_status(rid.removesuffix("_QC"), st)) \
             if settings.get("export") else None
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -168,7 +170,8 @@ class Station:
         order = parse_order(order_ref, self.s.get("order_types"), self.s.get("order_pattern")) if order_ref else \
             {"order_ref": "", "order_type": ""}
         self.job = {"order_ref": order["order_ref"], "order_type": order["order_type"], "operator": operator,
-                    "started": datetime.now().isoformat(timespec="seconds")}
+                    "started": datetime.now().isoformat(timespec="seconds"), "session_id": uuid.uuid4().hex}
+        self._send_started()
         self.history.clear()
         self.latest, self.last_file, self.error, self._pass_since = None, None, None, None
         self.last_record = None
@@ -300,6 +303,8 @@ class Station:
         stem = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in stem)
         record = {
             "record_id": stem,
+            "event": "completed",
+            "session_id": self.job.get("session_id"),
             "station": self.s.get("station_name", platform.node()),
             "order_ref": self.job.get("order_ref", ""),
             "order_type": self.job.get("order_type", ""),
@@ -338,9 +343,25 @@ class Station:
         rec["qc"] = {"by": qc_by, "note": note.strip(), "at": datetime.now().isoformat(timespec="seconds"),
                      "statement": "Physically confirmed by secondary QC"}
         rec["result"] = "QC_CONFIRMED"
+        rec["event"] = "qc_confirmed"
         rec["operator_prompt"] = f"Physically confirmed by secondary QC ({qc_by}) - {self.s['pass_message']}"
         self._save(rec, suffix="_QC")
         return rec
+
+    def _send_started(self) -> None:
+        """'Order logged / check started' stamp to the webhook (Ops Hub) as soon as verify begins."""
+        wh = self.s.get("export", {}).get("webhook", {})
+        if self.exporter is None or not wh.get("enabled") or not wh.get("send_started", True):
+            return
+        ev = {"event": "started", "record_id": f"{self.job['session_id']}_started",
+              "session_id": self.job["session_id"], "station": self.s.get("station_name", platform.node()),
+              "order_ref": self.job["order_ref"], "order_type": self.job["order_type"], "board_id": self.board_id,
+              "operator": self.job["operator"], "started": self.job["started"]}
+        d = self.results_dir / "outbox" / "events"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"{ev['record_id']}.json"
+        p.write_text(json.dumps(ev, indent=2))
+        self.exporter.enqueue(ev, p, None, only=["webhook"])
 
     def _save(self, record: dict, suffix: str = "") -> None:
         """JSON file + CSV audit row + order log + export queue."""
@@ -363,18 +384,19 @@ class Station:
                         record["order_type"], record["board_id"], record["operator"], record["vision_result"],
                         record["result"], qc.get("by", ""), qc.get("note", ""), probs, str(json_path)])
 
-        export = "not configured"
-        if self.exporter is not None:
+        # log row first, so a fast background send can't be overwritten by a stale "queued" status
+        export = "queued" if self.exporter is not None and self.exporter.targets() else "not configured"
+        self.log.upsert({**record, "qc_by": qc.get("by"), "qc_note": qc.get("note"), "qc_at": qc.get("at"),
+                         "final_result": record["result"], "problems": probs, "json_path": str(json_path),
+                         "image_path": str(image_path) if image_path else "", "export_status": export})
+        if export == "queued":
             # QC update goes out as its own file so the original camera record is never overwritten downstream
             out = json_path
             if suffix:
                 out = json_path.with_name(json_path.stem + suffix + ".json")
                 out.write_text(json.dumps(record, indent=2))
-            export = self.exporter.enqueue({**record, "record_id": record["record_id"] + suffix}, out,
-                                           None if suffix else image_path)
-        self.log.upsert({**record, "qc_by": qc.get("by"), "qc_note": qc.get("note"), "qc_at": qc.get("at"),
-                         "final_result": record["result"], "problems": probs, "json_path": str(json_path),
-                         "image_path": str(image_path) if image_path else "", "export_status": export})
+            self.exporter.enqueue({**record, "record_id": record["record_id"] + suffix}, out,
+                                  None if suffix else image_path)
 
     def status(self) -> dict:
         with self._lock:

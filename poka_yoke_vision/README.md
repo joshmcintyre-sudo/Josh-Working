@@ -24,7 +24,7 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 29 tests: vision, learn→verify, orders, QC, log, export, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 30 tests: vision, learn→verify, orders, QC, log, export/Ops Hub stamps, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
 ```
 
 ## Operator workflow (`/`) - scan order first
@@ -67,7 +67,7 @@ Every check is one row in `results/order_log.db` (SQLite): time, order, type, mo
 
 Each saved record is queued in `results/outbox/pending/` and sent in the background; network drops retry every `retry_seconds`, sent jobs move to `outbox/sent/`. Status shows in the order log. Both targets are off until configured.
 
-**Your app (webhook)** - `POST` multipart: `record` (JSON) + `image` (JPG), optional `Authorization: Bearer <token>`.
+**Your app (webhook)** - `POST` multipart: `record` (JSON) + `image` (JPG). Three events per check, linked by `session_id`: `started` (order logged when verify begins), `completed` (camera result + image), `qc_confirmed` (secondary QC). Auth: `token` sent as `Authorization: Bearer`, or in a custom header via `token_header` (e.g. `x-pokayoke-key`). **Ops Hub setup: see [OPS_HUB_INTEGRATION.md](OPS_HUB_INTEGRATION.md).**
 ```json
 "export": { "webhook": { "enabled": true, "url": "https://your-app/api/pokayoke/results" } }
 ```
