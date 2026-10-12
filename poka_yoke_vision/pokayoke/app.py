@@ -15,6 +15,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 
 from .board import Component
 from .inspector import Inspector, annotate
+from .learn import LearnSession
 from .station import FileCamera, Station
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +26,10 @@ DEFAULTS = {
     "height": 720,
     "fps": 2,
     "stable_frames": 3,
-    "auto_stop_pass_seconds": 0,
+    "auto_stop_pass_seconds": 2,
+    "learn_repeats": 3,
+    "pass_message": "Now ready to bag and package kit",
+    "fail_message": "Review despatch list and verify all items are present",
     "qr_autoselect": False,
     "boards_dir": "boards",
     "results_dir": "results",
@@ -88,7 +92,7 @@ def create_app(station: Station) -> Flask:
     def start():
         b = request.get_json(force=True)
         try:
-            st.start(b.get("board_id") or None, b.get("job_ref", ""), b.get("operator", ""))
+            st.start(b.get("board_id") or None, b.get("despatch_ref", ""), b.get("operator", ""))
         except Exception as e:
             return err(str(e))
         return jsonify(st.status())
@@ -97,6 +101,86 @@ def create_app(station: Station) -> Flask:
     def stop():
         rec = st.stop()
         return jsonify(rec or {"error": "not running"})
+
+    @app.post("/api/cancel")
+    def cancel():
+        st.cancel()
+        return jsonify(st.status())
+
+    @app.get("/api/lookup")
+    def lookup():
+        """Scanned model barcode -> board. taught = has parts + reference so it can be verified."""
+        code = request.args.get("code", "")
+        bid = st.lib.lookup(code)
+        if not bid:
+            return jsonify({"code": code, "board_id": None, "taught": False})
+        b = st.lib.get(bid)
+        return jsonify({"code": code, "board_id": bid, "name": b.name, "product_line": b.product_line,
+                        "taught": bool(b.components and b.reference_images), "parts": len(b.components)})
+
+    # ---------------- guided learn mode (operator)
+    def learn_state():
+        if st.learn is None:
+            return err("Not in learn mode")
+        return jsonify(st.learn.state())
+
+    @app.post("/api/learn/start")
+    def learn_start():
+        b = request.get_json(force=True)
+        code = (b.get("code") or b.get("board_id") or "").strip()
+        try:
+            bid = st.lib.lookup(code) or st.lib.create(code, b.get("name", ""), b.get("product_line", "")).board_id
+        except ValueError as e:
+            return err(str(e))
+        board = st.lib.get(bid)
+        if code and code.lower() != bid.lower() and code not in board.barcodes:
+            board.barcodes.append(code)          # remember the scanned model barcode for next time
+        st.cancel()
+        st.learn = LearnSession(board, b.get("repeats") or st.s["learn_repeats"])
+        st.preview(True)
+        return learn_state()
+
+    @app.get("/api/learn/state")
+    def learn_get():
+        return learn_state()
+
+    @app.post("/api/learn/<action>")
+    def learn_action(action):
+        L = st.learn
+        if L is None:
+            return err("Not in learn mode")
+        b = request.get_json(silent=True) or {}
+        try:
+            if action == "capture":
+                L.capture(st.snapshot())
+            elif action == "part":
+                L.name_part(b.get("label", ""), b.get("part_number", ""), int(b.get("qty") or 1))
+            elif action == "retry":
+                L.retry()
+            elif action == "undo":
+                L.undo()
+            elif action == "parts_done":
+                L.parts_done()
+            elif action == "save":
+                if L.step != "done":
+                    return err("Learning not finished")
+                board = L.commit()
+                st.cancel()
+                st.select_board(board.board_id)
+                return jsonify({"step": "saved", "board_id": board.board_id,
+                                "message": "Board saved - load a finished board and VERIFY"})
+            else:
+                abort(404)
+        except Exception as e:
+            return err(str(e))
+        return learn_state()
+
+    @app.get("/api/learn/image.jpg")
+    def learn_image():
+        img = st.learn.image() if st.learn else None
+        if img is None:
+            abort(404)
+        return Response(cv2.imencode(".jpg", img)[1].tobytes(), mimetype="image/jpeg")
 
     @app.get("/results/<path:p>")
     def results(p):

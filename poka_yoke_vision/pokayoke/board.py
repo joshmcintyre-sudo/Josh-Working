@@ -48,6 +48,7 @@ class Board:
     empty_image: str = ""
     align: bool = True               # warp live frame onto reference (board can shift on bench)
     min_match_score: float = 0.5     # below this the board is flagged as wrong / not found
+    barcodes: list[str] = field(default_factory=list)   # model / SKU barcodes that select this board
     folder: Path | None = None
 
     # ---------- persistence ----------
@@ -108,6 +109,21 @@ class BoardLibrary:
 
     def get(self, board_id: str) -> Board:
         return Board.load(self.root / safe_id(board_id))
+
+    def lookup(self, code: str) -> str | None:
+        """Scanned barcode / typed text -> board_id (matches ID, alias barcodes or name)."""
+        code = code.strip()
+        if not code:
+            return None
+        key = code.lower()
+        for bid in self.ids():
+            b = self.get(bid)
+            if key in (b.board_id.lower(), b.name.lower()) or key in (x.lower() for x in b.barcodes):
+                return bid
+        try:
+            return safe_id(code) if safe_id(code) in self.ids() else None
+        except ValueError:
+            return None
 
     def create(self, board_id: str, name: str = "", product_line: str = "") -> Board:
         bid = safe_id(board_id)

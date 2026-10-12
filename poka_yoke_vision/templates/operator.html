@@ -7,103 +7,242 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<div id="frame" class="frame"></div>
 <header>
   <h1>Poka-Yoke Board Check <small>{{ station }}</small></h1>
-  <a href="/teach">Teach boards &rarr;</a>
+  <div class="crumbs" id="crumbs"></div>
+  <a href="/teach">Engineer &rarr;</a>
 </header>
-<main class="op">
-  <section class="left">
-    <div class="controls">
-      <label>Board <select id="board"></select></label>
-      <label>Job / WO <input id="job" placeholder="e.g. WO-10452"></label>
-      <label>Operator <input id="operator" placeholder="initials"></label>
-      <button id="start" class="go">START</button>
-      <button id="stop" class="stop" disabled>STOP &amp; SAVE</button>
+
+<!-- 1. IDLE -->
+<section class="screen center" data-screen="idle">
+  <div class="banner idle">SYSTEM IDLE</div>
+  <button class="go huge" id="newDespatch">NEW DESPATCH LIST</button>
+  <p class="hint">Camera is off. Press the button or scan a despatch list barcode.</p>
+</section>
+
+<!-- 2. DESPATCH LIST -->
+<section class="screen center" data-screen="despatch">
+  <h2>Step 1 &middot; Despatch list</h2>
+  <input id="despatch" class="scan" placeholder="Scan or type despatch list no." autocomplete="off">
+  <input id="operator" class="scan small" placeholder="Operator initials" autocomplete="off">
+  <div class="row"><button class="primary huge" id="despatchNext">NEXT</button><button id="toIdle1">Cancel</button></div>
+</section>
+
+<!-- 3. MODEL -->
+<section class="screen center" data-screen="model">
+  <h2>Step 2 &middot; Load model type</h2>
+  <input id="model" class="scan" placeholder="Scan model barcode" autocomplete="off">
+  <select id="modelList"><option value="">...or pick from list</option></select>
+  <div id="modelCard" class="card"></div>
+  <div class="row">
+    <button class="go huge" id="verifyBtn" disabled>VERIFY BOARD</button>
+    <button class="warn huge" id="learnBtn" disabled>LEARN MODE</button>
+  </div>
+  <button id="toIdle2">Cancel</button>
+</section>
+
+<!-- 4. LEARN -->
+<section class="screen learn" data-screen="learn">
+  <div class="left">
+    <div class="pair">
+      <figure><figcaption>Live camera</figcaption><img id="learnLive" alt=""></figure>
+      <figure><figcaption>Taught so far</figcaption><img id="learnImg" alt=""></figure>
     </div>
-    <div class="video"><img id="video" alt=""><div id="idle">Press START to begin inspection</div></div>
-  </section>
+  </div>
   <aside class="right">
-    <div id="banner" class="banner idle">READY</div>
-    <ul id="items"></ul>
-    <div id="file" class="file"></div>
-    <div id="error" class="error"></div>
+    <div class="stepbox"><div class="tag" id="learnTag">LEARN</div><div id="learnMsg" class="prompt"></div></div>
+    <div id="nameForm" class="col" hidden>
+      <input id="pLabel" class="scan" placeholder="Part name (e.g. M8 x 25 flange bolt)" autocomplete="off">
+      <input id="pNum" class="scan small" placeholder="Part number / scan part barcode" autocomplete="off">
+      <label>Quantity <input id="pQty" class="scan small" type="number" min="1" value="1"></label>
+      <div class="row"><button class="go huge" id="savePart">SAVE PART</button><button id="retryPart">Wrong area - retry</button></div>
+    </div>
+    <div class="row" id="captureRow">
+      <button class="primary huge" id="captureBtn">CAPTURE</button>
+      <button class="go" id="partsDone" hidden>ALL PARTS LOADED</button>
+      <button id="undoPart" hidden>Undo last part</button>
+    </div>
+    <button class="go huge" id="saveBoard" hidden>SAVE BOARD</button>
+    <ol id="learnParts" class="parts"></ol>
+    <button id="cancelLearn">Cancel learn</button>
   </aside>
-</main>
+</section>
+
+<!-- 5. VERIFY -->
+<section class="screen op" data-screen="verify">
+  <div class="left"><div class="video"><img id="video" alt=""></div></div>
+  <aside class="right">
+    <div id="banner" class="banner idle">LOOKING...</div>
+    <p class="hint">Verifying the finished board - confirms automatically when everything is present.</p>
+    <ul id="items"></ul>
+    <div class="row"><button class="primary huge" id="confirmBtn">CONFIRM &amp; SAVE</button><button id="cancelVerify">Cancel</button></div>
+  </aside>
+</section>
+
+<!-- 6. RESULT -->
+<section class="screen center" data-screen="result">
+  <div id="resultBanner" class="banner"></div>
+  <div id="resultMsg" class="prompt big"></div>
+  <ul id="resultItems"></ul>
+  <div class="row">
+    <button class="primary huge" id="recheck" hidden>RE-CHECK BOARD</button>
+    <button class="go huge" id="nextDespatch">NEXT DESPATCH LIST</button>
+  </div>
+  <button id="toIdle3">Finish (idle)</button>
+  <div id="file" class="file"></div>
+</section>
+
+<div id="error" class="error toast"></div>
+
 <script>
 const $ = id => document.getElementById(id);
-let poll = null;
+const ctx = {despatch: "", operator: localStorage.getItem("py_op") || "", board: null};
+let poll = null, liveTimer = null;
 
 async function api(path, body, method) {
-  const r = await fetch(path, body === undefined && !method ? {} :
-    {method: method || "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
+  const opts = body !== undefined || method ? {method: method || "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body || {})} : {};
+  const r = await fetch(path, opts); const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText); return j;
 }
+function fail(e) { $("error").textContent = e.message || e; $("error").style.display = "block"; setTimeout(() => $("error").style.display = "none", 6000); }
 
-async function loadBoards() {
-  const boards = await api("/api/boards");
-  const keep = localStorage.getItem("py_board");
-  $("board").innerHTML = '<option value="">(auto from QR label)</option>' + boards.map(b =>
+function show(name) {
+  document.querySelectorAll(".screen").forEach(s => s.hidden = s.dataset.screen !== name);
+  $("frame").className = "frame";
+  $("crumbs").textContent = [ctx.despatch && "Despatch " + ctx.despatch, ctx.board && ctx.board.board_id].filter(Boolean).join("  ›  ");
+  clearInterval(poll); poll = null; clearInterval(liveTimer); liveTimer = null;
+  const focus = {despatch: "despatch", model: "model"}[name];
+  if (focus) { $(focus).value = ""; $(focus).focus(); }
+}
+const onEnter = (id, fn) => $(id).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fn(); } });
+
+/* ---------- idle / despatch ---------- */
+async function goIdle() { try { await api("/api/cancel", {}); } catch (e) {} ctx.despatch = ""; ctx.board = null; show("idle"); }
+$("newDespatch").onclick = () => show("despatch");
+$("toIdle1").onclick = $("toIdle2").onclick = $("toIdle3").onclick = goIdle;
+function despatchNext() {
+  const d = $("despatch").value.trim(); if (!d) return fail("Scan or enter the despatch list number");
+  ctx.despatch = d; ctx.operator = $("operator").value.trim(); localStorage.setItem("py_op", ctx.operator);
+  showModel();
+}
+$("despatchNext").onclick = despatchNext;
+onEnter("despatch", () => $("operator").value ? despatchNext() : $("operator").focus());
+onEnter("operator", despatchNext);
+
+/* ---------- model ---------- */
+async function showModel() {
+  show("model"); ctx.board = null; $("modelCard").innerHTML = ""; $("verifyBtn").disabled = $("learnBtn").disabled = true;
+  const list = await api("/api/boards");
+  $("modelList").innerHTML = '<option value="">...or pick from list</option>' + list.map(b =>
     `<option value="${b.board_id}">${b.product_line ? b.product_line + " / " : ""}${b.name} [${b.board_id}]</option>`).join("");
-  if (keep) $("board").value = keep;
 }
+async function lookup(code) {
+  if (!code) return;
+  const r = await api("/api/lookup?code=" + encodeURIComponent(code));
+  ctx.board = r.board_id ? r : {board_id: null, code};
+  $("modelCard").innerHTML = r.board_id
+    ? `<b>${r.name}</b> &nbsp; [${r.board_id}] ${r.product_line || ""}<br>${r.taught ? `${r.parts} parts taught - ready to verify` : "<span class=warnText>Not taught yet - use LEARN MODE</span>"}`
+    : `<span class=warnText>Model "${code}" is new - use LEARN MODE to teach it</span>`;
+  $("verifyBtn").disabled = !r.taught; $("learnBtn").disabled = false;
+  (r.taught ? $("verifyBtn") : $("learnBtn")).focus();
+}
+onEnter("model", () => lookup($("model").value.trim()).catch(fail));
+$("modelList").onchange = () => lookup($("modelList").value).catch(fail);
 
-function render(s) {
-  const r = s.result;
-  const b = $("banner");
-  $("error").textContent = s.error || "";
-  if (s.mode !== "inspect" && !r) { b.className = "banner idle"; b.textContent = "READY"; $("items").innerHTML = ""; return; }
-  if (!r) { b.className = "banner idle"; b.textContent = "LOOKING..."; return; }
-  b.className = "banner " + (r.passed ? "pass" : "fail");
-  b.textContent = r.passed ? "PASS" : (r.board_ok ? "FAIL" : "WRONG BOARD");
+/* ---------- learn ---------- */
+$("learnBtn").onclick = async () => {
+  const b = ctx.board || {};
+  if (b.taught && !confirm(`Re-learn ${b.board_id}? This replaces its current teaching once saved.`)) return;
+  let name = "", line = "";
+  if (!b.board_id) { name = prompt("Model description (e.g. Hilux DC canopy kit):", b.code) || b.code; line = prompt("Product line:") || ""; }
+  try { renderLearn(await api("/api/learn/start", {code: b.board_id || b.code, name, product_line: line})); show("learn"); startLive(); }
+  catch (e) { fail(e); }
+};
+function startLive() {
+  liveTimer = setInterval(() => { $("learnLive").src = "/api/frame.jpg?" + Date.now(); }, 700);
+}
+function renderLearn(s) {
+  $("learnMsg").textContent = s.message;
+  const tags = {empty: "1 · EMPTY BOARD", part: `2 · PART ${s.parts.length + 1}`, name: "2 · NAME PART", undo: "2 · REMOVE PART",
+    repeat: `3 · REFERENCE ${s.ref_count + 1} / ${s.repeats}`, done: "4 · SAVE"};
+  $("learnTag").textContent = tags[s.step] || s.step;
+  $("nameForm").hidden = s.step !== "name";
+  $("captureRow").hidden = !["empty", "part", "repeat", "undo"].includes(s.step);
+  $("partsDone").hidden = $("undoPart").hidden = s.step !== "part" || !s.parts.length;
+  $("saveBoard").hidden = s.step !== "done";
+  $("learnParts").innerHTML = s.parts.map(p => `<li><b>${p.qty} x</b> ${p.label} <span class=hint>${p.part_number}</span></li>`).join("");
+  $("learnImg").src = s.step === "empty" ? "" : "/api/learn/image.jpg?" + Date.now();
+  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; setTimeout(() => $("pLabel").focus(), 50); }
+  else if (s.step === "done") $("saveBoard").focus(); else $("captureBtn").focus();
+}
+const L = (action, body) => api("/api/learn/" + action, body || {}).then(renderLearn).catch(fail);
+$("captureBtn").onclick = () => L("capture");
+$("partsDone").onclick = () => L("parts_done");
+$("undoPart").onclick = () => confirm("Remove the last taught part?") && L("undo");
+$("retryPart").onclick = () => L("retry");
+const savePart = () => { if (!$("pLabel").value.trim()) return fail("Enter a part name"); L("part", {label: $("pLabel").value, part_number: $("pNum").value, qty: $("pQty").value}); };
+$("savePart").onclick = savePart;
+onEnter("pLabel", () => $("pNum").focus()); onEnter("pNum", () => $("pQty").focus()); onEnter("pQty", savePart);
+$("saveBoard").onclick = async () => {
+  try { const r = await api("/api/learn/save", {}); ctx.board = await api("/api/lookup?code=" + r.board_id);
+    alert("Board saved. Load a finished board, then VERIFY."); startVerify(); } catch (e) { fail(e); }
+};
+$("cancelLearn").onclick = () => confirm("Cancel learning? Nothing will be saved.") && api("/api/cancel", {}).then(showModel);
+
+/* ---------- verify ---------- */
+$("verifyBtn").onclick = () => startVerify();
+async function startVerify() {
+  try { await api("/api/start", {board_id: ctx.board.board_id, despatch_ref: ctx.despatch, operator: ctx.operator}); }
+  catch (e) { return fail(e); }
+  show("verify"); $("video").src = "/video.mjpg?" + Date.now(); $("banner").className = "banner idle"; $("banner").textContent = "LOOKING..."; $("items").innerHTML = "";
+  poll = setInterval(tick, 500);
+}
+function items(r) {
+  if (!r) return "";
+  if (!r.board_ok) return `<li class="MISSING">${r.message}</li>`;
   const order = {MISSING: 0, SHORT: 1, EXTRA: 2, OK: 3};
-  const comps = [...r.components].sort((a, c) => order[a.status] - order[c.status]);
-  $("items").innerHTML = r.board_ok
-    ? comps.map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${c.status === "OK" ? c.label : c.message}</li>`).join("")
-    : `<li class="MISSING">${r.message}</li>`;
+  return [...r.components].sort((a, c) => order[a.status] - order[c.status])
+    .map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${c.status === "OK" ? c.label : c.message}</li>`).join("");
 }
-
 async function tick() {
   try {
     const s = await api("/api/status");
-    render(s);
-    if (s.mode !== "inspect") stopped(s);
-  } catch (e) { $("error").textContent = e.message; }
+    if (s.mode !== "inspect") return showResult(s);         // auto-confirmed on stable PASS
+    const r = s.result; if (!r) return;
+    $("banner").className = "banner " + (r.passed ? "pass" : "fail");
+    $("banner").textContent = r.passed ? "PASS" : (r.board_ok ? "CHECK" : "WRONG BOARD");
+    $("frame").className = "frame " + (r.passed ? "pass" : "fail");
+    $("items").innerHTML = items(r);
+  } catch (e) { fail(e); }
 }
+$("confirmBtn").onclick = async () => { await api("/api/stop", {}); showResult(await api("/api/status")); };
+$("cancelVerify").onclick = () => api("/api/cancel", {}).then(showModel);
 
-function running(on) {
-  $("start").disabled = on; $("stop").disabled = !on;
-  ["board", "job", "operator"].forEach(id => $(id).disabled = on);
-  $("idle").style.display = on ? "none" : "flex";
-  $("video").src = on ? "/video.mjpg?" + Date.now() : "";
+/* ---------- result ---------- */
+function showResult(s) {
+  show("result");
+  const pass = s.last_result === "PASS";
+  $("frame").className = "frame " + (pass ? "pass" : "fail");
+  $("resultBanner").className = "banner " + (pass ? "pass" : "fail");
+  $("resultBanner").textContent = pass ? "BOARD CONFIRMED" : (s.last_result === "NO_RESULT" ? "NO RESULT" : "ITEMS MISSING");
+  $("resultMsg").textContent = s.prompt || "";
+  $("resultItems").innerHTML = pass ? "" : items(s.result && {...s.result, components: s.result.components.filter(c => c.status !== "OK")});
+  $("recheck").hidden = pass;
+  $("file").innerHTML = s.last_file ? `Saved: <code>${s.last_file}</code>` : "";
+  (pass ? $("nextDespatch") : $("recheck")).focus();
 }
+$("recheck").onclick = () => startVerify();
+$("nextDespatch").onclick = () => { ctx.board = null; ctx.despatch = ""; show("despatch"); };
 
-function stopped(s) {
-  clearInterval(poll); poll = null; running(false);
-  if (s && s.last_file) $("file").innerHTML = `Saved: <code>${s.last_file}</code>`;
-}
-
-$("start").onclick = async () => {
-  localStorage.setItem("py_board", $("board").value);
-  $("file").textContent = ""; $("error").textContent = "";
-  try {
-    await api("/api/start", {board_id: $("board").value, job_ref: $("job").value, operator: $("operator").value});
-    running(true); poll = setInterval(tick, 500);
-  } catch (e) { $("error").textContent = e.message; }
-};
-
-$("stop").onclick = async () => {
-  const rec = await api("/api/stop", {});
-  await tick();
-  stopped({last_file: rec.error ? "" : (await api("/api/status")).last_file});
-};
-
-document.addEventListener("keydown", e => {        // foot pedal / barcode wedge friendly
-  if (e.target.tagName === "INPUT") return;
-  if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); (poll ? $("stop") : $("start")).click(); }
+$("operator").value = ctx.operator;
+show("idle");
+document.addEventListener("keydown", e => {   // scanner / foot pedal on idle screen
+  if ($("newDespatch").closest(".screen").hidden) return;
+  if (e.key === "Enter" || e.code === "Space") { e.preventDefault(); show("despatch"); }
+  else if (e.key.length === 1) { e.preventDefault(); show("despatch"); $("despatch").value = e.key; }  // barcode scan starts despatch
 });
-loadBoards();
 </script>
 </body>
 </html>

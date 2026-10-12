@@ -94,9 +94,11 @@ class Station:
         self.latest: InspectionResult | None = None
         self.jpeg: bytes | None = None
         self.last_file: str | None = None
+        self.last_record: dict | None = None
         self.error: str | None = None
         self._pass_since: float | None = None
         self._qr = cv2.QRCodeDetector()
+        self.learn = None                     # LearnSession while in guided learn mode
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
@@ -133,16 +135,17 @@ class Station:
         return frame
 
     # ------------------------------------------------ inspection session
-    def start(self, board_id: str | None, job_ref: str = "", operator: str = "") -> None:
+    def start(self, board_id: str | None, despatch_ref: str = "", operator: str = "") -> None:
         if self.mode == "inspect":
             return
         if board_id:
             self.select_board(board_id)
         if self.inspector is None and not self.s.get("qr_autoselect"):
             raise RuntimeError("Select a board first")
-        self.job = {"job_ref": job_ref, "operator": operator, "started": datetime.now().isoformat(timespec="seconds")}
+        self.job = {"despatch_ref": despatch_ref, "operator": operator, "started": datetime.now().isoformat(timespec="seconds")}
         self.history.clear()
         self.latest, self.last_file, self.error, self._pass_since = None, None, None, None
+        self.last_record = None
         self._ensure_camera()
         self.mode = "inspect"
         self._start_loop()
@@ -155,6 +158,14 @@ class Station:
             self._thread.join(timeout=3)
         self.camera.close()
         return self._write_result()
+
+    def cancel(self) -> None:
+        """Back to idle without writing a result (operator abort / leaving learn mode)."""
+        self.mode = "idle"
+        if self._thread:
+            self._thread.join(timeout=3)
+        self.camera.close()
+        self.learn = None
 
     def _start_loop(self):
         if self._thread and self._thread.is_alive():
@@ -243,16 +254,17 @@ class Station:
         record = {
             "station": self.s.get("station_name", platform.node()),
             "board_id": self.board_id,
-            "job_ref": self.job.get("job_ref", ""),
+            "despatch_ref": self.job.get("despatch_ref", ""),
             "operator": self.job.get("operator", ""),
             "started": self.job.get("started"),
             "finished": now.isoformat(timespec="seconds"),
             "result": "NO_RESULT" if res is None else ("PASS" if res.passed else "FAIL"),
+            "operator_prompt": self.s["pass_message"] if res is not None and res.passed else self.s["fail_message"],
             "inspection": None if res is None else res.to_dict(),
         }
         day = self.results_dir / now.strftime("%Y-%m-%d")
         day.mkdir(parents=True, exist_ok=True)
-        stem = f"{self.board_id or 'unknown'}_{now:%H%M%S}" + (f"_{record['job_ref']}" if record["job_ref"] else "")
+        stem = f"{self.board_id or 'unknown'}_{now:%H%M%S}" + (f"_{record['despatch_ref']}" if record["despatch_ref"] else "")
         stem = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in stem)
         json_path = day / f"{stem}.json"
         if getattr(self, "_last_img", None) is not None:
@@ -265,13 +277,14 @@ class Station:
         with csv_path.open("a", newline="") as f:
             w = csv.writer(f)
             if new:
-                w.writerow(["finished", "station", "board_id", "job_ref", "operator", "result",
+                w.writerow(["finished", "station", "board_id", "despatch_ref", "operator", "result",
                             "match_score", "problems", "file"])
             probs = "" if res is None else "; ".join(c.message for c in res.problems)
-            w.writerow([record["finished"], record["station"], record["board_id"], record["job_ref"],
+            w.writerow([record["finished"], record["station"], record["board_id"], record["despatch_ref"],
                         record["operator"], record["result"], None if res is None else res.match_score,
                         probs, str(json_path)])
         self.last_file = str(json_path)
+        self.last_record = record
         return record
 
     def status(self) -> dict:
@@ -282,5 +295,7 @@ class Station:
                 "job": self.job,
                 "result": None if self.latest is None else self.latest.to_dict(),
                 "last_file": self.last_file,
+                "last_result": self.last_record and self.last_record["result"],
+                "prompt": self.last_record and self.last_record["operator_prompt"],
                 "error": self.error,
             }

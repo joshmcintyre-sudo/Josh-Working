@@ -76,13 +76,13 @@ def test_station_start_stop_writes_result(lib, tmp_path):
     s = dict(DEFAULTS, boards_dir=str(lib.root), results_dir=str(tmp_path / "results"), fps=10)
     st = Station(s, FileCamera(str(img)))
     client = create_app(st).test_client()
-    assert client.post("/api/start", json={"board_id": "DEMO-HILUX-01", "job_ref": "WO-1001", "operator": "JM"}).status_code == 200
+    assert client.post("/api/start", json={"board_id": "DEMO-HILUX-01", "despatch_ref": "WO-1001", "operator": "JM"}).status_code == 200
     for _ in range(50):
         if st.latest is not None and len(st.history) >= 3:
             break
         time.sleep(0.05)
     rec = client.post("/api/stop").get_json()
-    assert rec["result"] == "FAIL" and rec["job_ref"] == "WO-1001"
+    assert rec["result"] == "FAIL" and rec["despatch_ref"] == "WO-1001"
     saved = json.loads(open(st.last_file).read())
     bolts = next(c for c in saved["inspection"]["components"] if c["part_number"] == "FAST-M8-25")
     assert (bolts["found"], bolts["status"]) == (5, "SHORT")
@@ -103,3 +103,65 @@ def test_teach_api_roundtrip(lib, tmp_path):
     t = c.post("/api/boards/PY-RANGER-02/test").get_json()
     assert t["passed"]
     assert c.put("/api/boards/PY-RANGER-02", json={"components": [{"id": "a", "label": "x", "roi": [0, 0, 0, 5]}]}).status_code == 400
+
+
+def _iou(a, b):
+    ax, ay, aw, ah = a; bx, by, bw, bh = b
+    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx)); iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+    return ix * iy / (aw * ah + bw * bh - ix * iy)
+
+
+def test_operator_learn_then_verify_workflow(tmp_path):
+    """Idle -> scan model -> guided learn (part by part) -> verify -> PASS prompt / FAIL prompt."""
+    bare = demo.bare_board()
+    cam = FileCamera(str(tmp_path / "x.png"))
+    cam.frame = bare
+    s = dict(DEFAULTS, boards_dir=str(tmp_path / "boards"), results_dir=str(tmp_path / "res"), fps=10,
+             auto_stop_pass_seconds=0.3, stable_frames=2, learn_repeats=2)
+    st = Station(s, cam)
+    c = create_app(st).test_client()
+
+    assert c.get("/api/lookup?code=SKU-99812").get_json()["board_id"] is None
+    r = c.post("/api/learn/start", json={"code": "SKU-99812", "name": "Ranger kit"}).get_json()
+    assert r["step"] == "empty"
+    assert c.post("/api/learn/capture").get_json()["step"] == "part"
+
+    expected = {c_.label: c_.roi for c_ in demo.components()}
+    steps = [("Mounting bracket LH", dict(bracket=True, seal=False, loom=False, bolts=0), 1),
+             ("Door seal 450mm", dict(bracket=True, seal=True, loom=False, bolts=0), 1),
+             ("Wiring loom bag", dict(bracket=True, seal=True, loom=True, bolts=0), 1),
+             ("M8 x 25 flange bolt", dict(bracket=True, seal=True, loom=True, bolts=6), 6)]
+    for label, kw, qty in steps:
+        cam.frame = demo.kitted(bare, **kw)
+        r = c.post("/api/learn/capture").get_json()
+        assert r["step"] == "name", r
+        assert _iou(r["proposal"], expected[label]) > 0.5, (label, r["proposal"])
+        r = c.post("/api/learn/part", json={"label": label, "qty": qty}).get_json()
+        assert r["step"] == "part"
+    # capturing with nothing new placed must not invent a part
+    assert c.post("/api/learn/capture").get_json()["step"] == "part"
+    assert c.post("/api/learn/parts_done").get_json()["step"] == "repeat"
+    cam.frame = moved(demo.kitted(bare), 10, 5, 1.0, 1.0)
+    assert c.post("/api/learn/capture").get_json()["step"] == "done"
+    assert c.post("/api/learn/save").get_json()["step"] == "saved"
+
+    look = c.get("/api/lookup?code=SKU-99812").get_json()       # scanned barcode now finds the board
+    assert look["taught"] and look["parts"] == 4
+
+    # verify a short board -> operator confirms -> fail prompt
+    cam.frame = demo.kitted(bare, bolts=3)
+    c.post("/api/start", json={"board_id": look["board_id"], "despatch_ref": "DL-5501"})
+    time.sleep(0.6)
+    rec = c.post("/api/stop").get_json()
+    assert rec["result"] == "FAIL"
+    assert rec["operator_prompt"] == "Review despatch list and verify all items are present"
+
+    # verify a complete board -> auto-confirms on stable PASS -> pass prompt
+    cam.frame = demo.kitted(bare)
+    c.post("/api/start", json={"board_id": look["board_id"], "despatch_ref": "DL-5501"})
+    for _ in range(60):
+        if st.mode == "idle" and st.last_record:
+            break
+        time.sleep(0.05)
+    s_ = c.get("/api/status").get_json()
+    assert s_["last_result"] == "PASS" and s_["prompt"] == "Now ready to bag and package kit"
