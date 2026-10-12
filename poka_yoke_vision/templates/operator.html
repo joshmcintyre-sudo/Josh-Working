@@ -41,7 +41,7 @@
   <div class="left">
     <div class="pair">
       <figure><figcaption>Live camera</figcaption><img id="learnLive" alt=""></figure>
-      <figure><figcaption>Taught so far</figcaption><img id="learnImg" alt=""></figure>
+      <figure><figcaption id="learnCap">Taught so far</figcaption><canvas id="learnCanvas" width="1280" height="720"></canvas></figure>
     </div>
   </div>
   <aside class="right">
@@ -49,7 +49,17 @@
     <div id="nameForm" class="col" hidden>
       <input id="pLabel" class="scan" placeholder="Part name (e.g. M8 x 25 flange bolt)" autocomplete="off">
       <input id="pNum" class="scan small" placeholder="Part number / scan part barcode" autocomplete="off">
-      <label>Quantity <input id="pQty" class="scan small" type="number" min="1" value="1"></label>
+      <label>Layout
+        <select id="pLayout" class="scan small">
+          <option value="single">Single part</option>
+          <option value="loose">Several loose parts (counted)</option>
+          <option value="grid">Grid - one part per cell (e.g. 24 nuts)</option>
+        </select></label>
+      <div class="row" id="gridRow" hidden>
+        <label>Rows <input id="pRows" class="scan small" type="number" min="1" max="50" value="4" style="width:110px"></label>
+        <label>Columns <input id="pCols" class="scan small" type="number" min="1" max="50" value="6" style="width:110px"></label>
+      </div>
+      <label id="qtyLabel">Quantity <input id="pQty" class="scan small" type="number" min="1" value="1"></label>
       <label>Material / colour (always looks like)
         <select id="pMat" class="scan small">
           <option value="steel">Steel / zinc / bright metal</option><option value="black">Black (rubber, black-oxide, plastic)</option>
@@ -187,6 +197,35 @@ $("learnBtn").onclick = async () => {
   catch (e) { fail(e); }
 };
 function startLive() { liveTimer = setInterval(() => { $("learnLive").src = "/api/frame.jpg?" + Date.now(); }, 700); }
+/* editable part box on the taught-so-far picture: drag to draw the part area (whole pocket / whole grid) */
+const lc = {img: new Image(), box: null, step: "", drag: null, ready: false};
+function lcDraw() {
+  const cv = $("learnCanvas"), g = cv.getContext("2d");
+  if (!lc.img.complete || !lc.img.naturalWidth) { g.fillStyle = "#000"; g.fillRect(0, 0, cv.width, cv.height); return; }
+  g.drawImage(lc.img, 0, 0);
+  const b = lc.drag || lc.box;
+  if (lc.step !== "name" || !b) return;
+  g.lineWidth = 5; g.strokeStyle = "#876044"; g.strokeRect(b[0], b[1], b[2], b[3]);
+  if ($("pLayout").value === "grid") {
+    const r = +$("pRows").value || 1, c = +$("pCols").value || 1;
+    g.lineWidth = 1.5;
+    for (let i = 1; i < r; i++) { g.beginPath(); g.moveTo(b[0], b[1] + b[3] * i / r); g.lineTo(b[0] + b[2], b[1] + b[3] * i / r); g.stroke(); }
+    for (let i = 1; i < c; i++) { g.beginPath(); g.moveTo(b[0] + b[2] * i / c, b[1]); g.lineTo(b[0] + b[2] * i / c, b[1] + b[3]); g.stroke(); }
+  }
+}
+function lcPt(e) { const cv = $("learnCanvas"), r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height]; }
+$("learnCanvas").addEventListener("pointerdown", e => { if (lc.step !== "name" || !lc.ready) return;   /* picture must be loaded first */ const p = lcPt(e); lc.start = p; lc.drag = [p[0], p[1], 0, 0]; e.target.setPointerCapture(e.pointerId); });
+$("learnCanvas").addEventListener("pointermove", e => { if (!lc.drag) return; const p = lcPt(e), a = lc.start;
+  lc.drag = [Math.min(a[0], p[0]), Math.min(a[1], p[1]), Math.abs(p[0] - a[0]), Math.abs(p[1] - a[1])]; lcDraw(); });
+$("learnCanvas").addEventListener("pointerup", () => { if (!lc.drag) return; if (lc.drag[2] > 12 && lc.drag[3] > 12) lc.box = lc.drag.map(Math.round); lc.drag = null; lcDraw(); });
+function layoutUi() {
+  const grid = $("pLayout").value === "grid", single = $("pLayout").value === "single";
+  $("gridRow").hidden = !grid; $("qtyLabel").hidden = grid || single;
+  if (single) $("pQty").value = 1;
+  lcDraw();
+}
+["pLayout", "pRows", "pCols"].forEach(id => $(id).addEventListener("input", layoutUi));
+
 function renderLearn(s) {
   $("learnMsg").textContent = s.message;
   const tags = {empty: "1 / Empty board", part: `2 / Part ${s.parts.length + 1}`, name: "2 / Name part", undo: "2 / Remove part",
@@ -196,9 +235,16 @@ function renderLearn(s) {
   $("captureRow").hidden = !["empty", "part", "repeat", "undo"].includes(s.step);
   $("partsDone").hidden = $("undoPart").hidden = s.step !== "part" || !s.parts.length;
   $("saveBoard").hidden = s.step !== "done";
-  $("learnParts").innerHTML = s.parts.map(p => `<li>${p.qty} x ${esc(p.label)} <span class=hint>${esc(p.part_number)} · ${esc(p.material)}${p.alt_materials && p.alt_materials.length ? " (or " + esc(p.alt_materials.join(", ")) + ")" : ""}</span></li>`).join("");
-  $("learnImg").src = s.step === "empty" ? "" : "/api/learn/image.jpg?" + Date.now();
-  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; $("pMat").value = s.suggested_material || "auto"; $("pAlt").value = ""; $("pLabel").focus(); }
+  $("learnParts").innerHTML = s.parts.map(p => `<li>${p.grid ? p.grid[0] + "x" + p.grid[1] + " grid" : p.qty + " x"} ${esc(p.label)} <span class=hint>${esc(p.part_number)} · ${esc(p.material)}${p.alt_materials && p.alt_materials.length ? " (or " + esc(p.alt_materials.join(", ")) + ")" : ""}</span></li>`).join("");
+  lc.step = s.step; lc.box = s.proposal ? [...s.proposal] : null;
+  $("learnCap").textContent = s.step === "name" ? "New part area (drag to redraw)" : "Taught so far";
+  $("learnCanvas").style.cursor = s.step === "name" ? "crosshair" : "default";
+  lc.ready = false;
+  if (s.step === "empty") { lc.img = new Image(); lcDraw(); }
+  else { lc.img = new Image(); lc.img.onload = () => { $("learnCanvas").width = lc.img.naturalWidth; $("learnCanvas").height = lc.img.naturalHeight; lc.ready = true; lcDraw(); };
+         lc.img.src = "/api/learn/image.jpg?raw=1&" + Date.now(); }
+  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; $("pLayout").value = "single";
+    $("pMat").value = s.suggested_material || "auto"; $("pAlt").value = ""; layoutUi(); $("pLabel").focus(); }
   else if (s.step === "done") $("saveBoard").focus(); else $("captureBtn").focus();
 }
 const L = (action, body) => api("/api/learn/" + action, body || {}).then(renderLearn).catch(fail);
@@ -206,7 +252,13 @@ $("captureBtn").onclick = () => L("capture");
 $("partsDone").onclick = () => L("parts_done");
 $("undoPart").onclick = () => confirm("Remove the last taught part?") && L("undo");
 $("retryPart").onclick = () => L("retry");
-const savePart = () => { if (!$("pLabel").value.trim()) return fail("Enter a part name"); L("part", {label: $("pLabel").value, part_number: $("pNum").value, qty: $("pQty").value, material: $("pMat").value, alt_materials: $("pAlt").value ? [$("pAlt").value] : []}); };
+const savePart = () => {
+  if (!$("pLabel").value.trim()) return fail("Enter a part name");
+  if (!lc.box) return fail("Drag a box around the part area on the picture first");
+  const layout = $("pLayout").value === "loose" && +$("pQty").value === 1 ? "single" : $("pLayout").value;
+  L("part", {label: $("pLabel").value, part_number: $("pNum").value, qty: $("pQty").value, material: $("pMat").value,
+             alt_materials: $("pAlt").value ? [$("pAlt").value] : [], roi: lc.box, layout, rows: $("pRows").value, cols: $("pCols").value});
+};
 $("savePart").onclick = savePart;
 onEnter("pLabel", () => $("pNum").focus()); onEnter("pNum", () => $("pQty").focus()); onEnter("pQty", savePart);
 $("saveBoard").onclick = async () => {

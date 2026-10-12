@@ -93,6 +93,7 @@ ul.items li.OK { color:var(--muted); }
 .pair figure { margin:0; border:1px solid var(--line); }
 .pair figcaption { padding:6px 10px; color:var(--muted); font-size:13px; border-bottom:1px solid var(--line); }
 .pair img { width:100%; display:block; min-height:200px; }
+.pair canvas { width:100%; display:block; touch-action:none; background:var(--utm-black); }
 .stepbox { border:1px solid var(--line); border-left:4px solid var(--utm-bronze); padding:14px 16px; }
 .stepbox .tag { color:var(--utm-bronze); margin-bottom:6px; letter-spacing:.14em; }
 .parts { margin:0; padding-left:22px; font-size:18px; } .parts li { padding:3px 0; }

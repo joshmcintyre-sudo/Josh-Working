@@ -290,7 +290,8 @@ def create_app(station: Station) -> Flask:
                 L.capture(st.snapshot())
             elif action == "part":
                 L.name_part(b.get("label", ""), b.get("part_number", ""), int(b.get("qty") or 1),
-                            b.get("material", "auto"), b.get("alt_materials") or [])
+                            b.get("material", "auto"), b.get("alt_materials") or [], b.get("roi"),
+                            b.get("layout", "auto"), int(b.get("rows") or 0), int(b.get("cols") or 0))
             elif action == "retry":
                 L.retry()
             elif action == "undo":
@@ -313,7 +314,7 @@ def create_app(station: Station) -> Flask:
 
     @app.get("/api/learn/image.jpg")
     def learn_image():
-        img = st.learn.image() if st.learn else None
+        img = st.learn.image(raw=request.args.get("raw") == "1") if st.learn else None
         if img is None:
             abort(404)
         return Response(cv2.imencode(".jpg", img)[1].tobytes(), mimetype="image/jpeg")

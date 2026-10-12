@@ -104,6 +104,8 @@ class ComponentResult:
     message: str
     roi: list[int]
     variant: str | None = None   # which allowed variant was seen when it isn't the usual one (e.g. "white")
+    grid: list[int] | None = None          # grid parts: [rows, cols]
+    empty_cells: list[list[int]] | None = None   # grid parts: [[row, col], ...] 1-based, cells with no part
 
 
 @dataclass
@@ -169,6 +171,7 @@ class Inspector:
             self.empty = lighting.correct(self._to_base(self.empty), self.base, self.bg_mask)
             if any(c.ref_fg_area <= 0 for c in board.components):
                 self.calibrate()                   # board taught before colour learning: learn it now (in memory)
+        self.shapes = {c.id: self._shape(c, self.base) for c in board.components if self._handed(c)}
 
     def _board_similarity(self, live: np.ndarray, H, frame: np.ndarray) -> float:
         """NCC of the bare-board background vs reference: ~1 same board, ~0 different board."""
@@ -233,6 +236,11 @@ class Inspector:
             if c.method == "count":
                 counted = [cv2.countNonZero(self._count_mask(c, _crop(r, c.roi), e)) for r in self.refs]
                 c.unit_area = float(np.median(counted)) / max(1, c.expected_count)
+            if c.method == "grid":
+                fracs = np.concatenate([self._cell_fill(c, _crop(r, c.roi), e).ravel() for r in self.refs])
+                c.cell_fg = float(np.median(fracs))
+                if c.cell_fg < 0.03:
+                    notes.append(f"  ! {c.label}: parts hardly show against the board in their cells - check the grid size")
             seen = colour.describe(c.colour_lab)
             notes.append(f"{c.label}: looks {seen}" + (f", material {c.material}" if c.material != "auto" else
                          f" (suggest material '{colour.suggest(c.colour_lab)}')"))
@@ -247,6 +255,64 @@ class Inspector:
             return None, False
         seen = [float(v) for v in np.median(_lab(cv2.GaussianBlur(patch, (3, 3), 0))[fg], axis=0)]
         return seen, fg.sum() >= 0.4 * c.ref_fg_area
+
+    # ---- handedness: LH / RH parts that look identical except mirrored
+    def _handed(self, c: Component) -> bool:
+        return (self.empty is not None and c.method == "presence" and c.ref_fg_area > 0
+                and c.material in colour.RULED)          # bags / auto parts change shape every placement
+
+    def _shape(self, c: Component, img: np.ndarray) -> np.ndarray:
+        """Part outline inside its box, small (<= 64 px) and softened so a few mm of placement doesn't matter."""
+        m = self._material_mask(c, _crop(img, c.roi), _crop(self.empty, c.roi)).astype(np.float32)
+        h, w = m.shape
+        s = 64.0 / max(h, w)
+        m = cv2.resize(m, (max(8, round(w * s)), max(8, round(h * s))), interpolation=cv2.INTER_AREA)
+        return cv2.GaussianBlur(m, (5, 5), 0)
+
+    @staticmethod
+    def _best_match(live: np.ndarray, tmpl: np.ndarray) -> float:
+        """Best normalised match of the template anywhere within +-15% of the box (placement tolerance)."""
+        ph, pw = int(tmpl.shape[0] * 0.15) + 1, int(tmpl.shape[1] * 0.15) + 1
+        padded = cv2.copyMakeBorder(live, ph, ph, pw, pw, cv2.BORDER_CONSTANT, value=0)
+        if tmpl.std() < 1e-3 or live.std() < 1e-3:
+            return 0.0
+        return float(cv2.matchTemplate(padded, tmpl, cv2.TM_CCOEFF_NORMED).max())
+
+    def _mirrored(self, c: Component, live: np.ndarray) -> bool:
+        ref = self.shapes.get(c.id)
+        if ref is None:
+            return False
+        cur = self._shape(c, live)
+        if cur.shape != ref.shape:
+            cur = cv2.resize(cur, (ref.shape[1], ref.shape[0]))
+        same = self._best_match(cur, ref)
+        flipped = max(self._best_match(cur, np.ascontiguousarray(ref[:, ::-1])),
+                      self._best_match(cur, np.ascontiguousarray(ref[::-1, :])))
+        # a symmetric part matches its mirror equally well, so only a clear win for the mirror counts
+        return flipped > same + 0.12 and same < 0.85
+
+    def _cell_fill(self, c: Component, patch: np.ndarray, empty_patch: np.ndarray) -> np.ndarray:
+        """rows x cols array: share of each cell's centre (outer 18% trimmed) covered by a part."""
+        mask = self._count_mask(c, patch, empty_patch) > 0
+        h, w = mask.shape
+        out = np.zeros((c.grid_rows, c.grid_cols), np.float32)
+        for r in range(c.grid_rows):
+            for k in range(c.grid_cols):
+                y0, y1 = int(h * r / c.grid_rows), int(h * (r + 1) / c.grid_rows)
+                x0, x1 = int(w * k / c.grid_cols), int(w * (k + 1) / c.grid_cols)
+                dy, dx = int((y1 - y0) * 0.18), int((x1 - x0) * 0.18)
+                cell = mask[y0 + dy:y1 - dy, x0 + dx:x1 - dx]
+                out[r, k] = float(cell.mean()) if cell.size else 0.0
+        return out
+
+    def _grid(self, c: Component, live: np.ndarray):
+        """One part per cell: found = filled cells; info['empty'] = 1-based [row, col] of empty cells."""
+        if self.empty is None or c.cell_fg <= 0:
+            return self._presence(c, live)
+        fill = self._cell_fill(c, _crop(live, c.roi), _crop(self.empty, c.roi))
+        filled = fill >= max(0.02, 0.35 * c.cell_fg)
+        empty = [[int(r) + 1, int(k) + 1] for r, k in zip(*np.where(~filled))]
+        return int(filled.sum()), float(fill.mean() / max(c.cell_fg, 1e-6)), {"empty": empty}
 
     def _count_mask(self, c: Component, patch: np.ndarray, empty_patch: np.ndarray) -> np.ndarray:
         """Count shape from the difference mask; with a material rule, keep only blobs that are mostly
@@ -305,6 +371,8 @@ class Inspector:
         elif something_there and colour.distance(seen, c.colour_lab) > colour.PROFILE_TOL.get(c.material, 45):
             found, wrong = 0, seen
         if found:
+            if self._mirrored(c, live):
+                return 0, score, {"mirrored": True}
             return found, score, {}
         # 2) an allowed variant (e.g. the white version of a usually-black bracket)
         fg = _fg_mask(p, e, min(c.fg_level, SOMETHING)) > 0
@@ -373,8 +441,20 @@ class Inspector:
                 comps.append(ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "GLARE", 0.0,
                                              f"Can't see {c.label} - glare, adjust the light", c.roi))
                 continue
-            found, s, info = (self._count if c.method == "count" else self._presence)(c, live)
-            if "wrong" in info:
+            check = {"count": self._count, "grid": self._grid}.get(c.method, self._presence)
+            found, s, info = check(c, live)
+            if c.method == "grid" and "empty" in info:
+                r = component_status(c, found, s)
+                if info["empty"]:
+                    cells = ", ".join(f"R{a}C{b}" for a, b in info["empty"][:8]) + (" ..." if len(info["empty"]) > 8 else "")
+                    r.message += f" - empty: {cells}"
+                r.grid, r.empty_cells = [c.grid_rows, c.grid_cols], info["empty"]
+                comps.append(r)
+            elif info.get("mirrored"):
+                comps.append(ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "WRONG_PART",
+                                             round(s, 3), f"WRONG PART? {c.label} looks mirrored - other-hand part fitted?",
+                                             c.roi))
+            elif "wrong" in info:
                 comps.append(wrong_part(c, info["wrong"], s, info.get("want")))
             elif info.get("variant") and found == c.expected_count:
                 comps.append(ComponentResult(c.id, c.label, c.part_number, c.expected_count, found, "OK", round(s, 3),
@@ -404,6 +484,17 @@ def annotate(img: np.ndarray, res: InspectionResult) -> np.ndarray:
     for c in res.components:
         x, y, w, h = c.roi
         col = GREEN if c.status == "OK" else (AMBER if c.status in ("SHORT", "EXTRA") else RED)
+        if c.grid:
+            rows, cols = c.grid
+            for i in range(1, rows):
+                cv2.line(out, (x, y + h * i // rows), (x + w, y + h * i // rows), col, 1)
+            for i in range(1, cols):
+                cv2.line(out, (x + w * i // cols, y), (x + w * i // cols, y + h), col, 1)
+            for r_, k_ in c.empty_cells or []:
+                cx0, cy0 = x + w * (k_ - 1) // cols, y + h * (r_ - 1) // rows
+                cx1, cy1 = x + w * k_ // cols, y + h * r_ // rows
+                cv2.line(out, (cx0 + 4, cy0 + 4), (cx1 - 4, cy1 - 4), RED, 3)
+                cv2.line(out, (cx0 + 4, cy1 - 4), (cx1 - 4, cy0 + 4), RED, 3)
         cv2.rectangle(out, (x, y), (x + w, y + h), col, 3)
         tag = f"{c.label} {c.found}/{c.expected}"
         (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)

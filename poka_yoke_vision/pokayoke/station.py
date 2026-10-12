@@ -291,7 +291,7 @@ class Station:
             key = Counter((r.components[i].found, r.components[i].status) for r in frames).most_common(1)[0][0]
             pick = next(r.components[i] for r in reversed(frames) if (r.components[i].found, r.components[i].status) == key)
             score = float(np.mean([r.components[i].score for r in frames]))
-            plain = pick.status in ("OK", "MISSING", "SHORT", "EXTRA") and not pick.variant
+            plain = pick.status in ("OK", "MISSING", "SHORT", "EXTRA") and not pick.variant and not pick.grid
             comps.append(component_status(c, pick.found, score) if plain else replace(pick, score=round(score, 3)))
         bad = [c for c in comps if c.status != "OK"]
         msg = "PASS - board complete" if not bad else f"FAIL - {len(bad)} item(s) to fix"

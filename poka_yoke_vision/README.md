@@ -24,7 +24,7 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 152 tests: vision, lighting, colour/material/variants, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 170 tests: vision, lighting, colour/material/variants, grids, LH/RH, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
 ```
 
 ## Operator workflow (`/`) - scan order first
@@ -84,6 +84,13 @@ Each saved record is queued in `results/outbox/pending/` and sent in the backgro
 3. `settings.json` → `"box": {"enabled": true, "folder_id": "<id>"}`. Copy `secrets.example.json` to `secrets.json` (git-ignored) and fill `client_id`, `client_secret`, `subject_id` (enterprise ID). For a quick test a 60-min `developer_token` works instead.
 
 Ref: Box docs - [Upload file](https://developer.box.com/reference/post-files-content/), [Client Credentials Grant](https://developer.box.com/guides/authentication/client-credentials/).
+
+## Part areas, grids and left/right parts (learn mode)
+
+- **Part area box:** after each CAPTURE the new part gets a bronze box. Drag on the picture to redraw it (e.g. box the whole pocket for a bag, so normal placement variation stays inside). If the camera can't find the part (low contrast), the operator just drags the box.
+- **Layout:** *Single part* · *Several loose parts (counted)* · *Grid*. Grid = rows x columns, one part per cell (e.g. **24 x M6 nylocs in a 4 x 6 matrix**): each cell is checked on its own, the screen says **"Need 3 more M6 nyloc nut (21/24) - empty: R2C5, R3C1, R4C6"** and the empty cells get a red cross on the picture. Draw the box exactly round the grid. Engineer screen: Method `grid`, Grid `4x6`.
+- **Left / right (mirror-image) parts:** each solid-colour single part's taught outline is compared with its mirror image. A swapped LH/RH bracket shows **"WRONG PART? Bracket LH looks mirrored - other-hand part fitted?"**. Symmetric parts can't trigger it; bags are skipped (their shape changes every time).
+- Tested in `tests/test_grid_and_box.py`: grid counts and exact empty cells under 7 lighting conditions and a moved board, wrong-colour nuts, LH/RH swap under 6 lighting conditions, learn mode with a drawn box, grid layout, manual box when auto-detection finds nothing.
 
 ## Teaching / fine-tuning a board (engineer, `/teach`)
 

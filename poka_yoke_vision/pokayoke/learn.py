@@ -80,10 +80,12 @@ class LearnSession:
                 "suggested_material": self._suggest() if self.step == "name" else None,
                 "parts": [{"label": c.label, "part_number": c.part_number, "qty": c.expected_count,
                            "method": c.method, "material": c.material, "alt_materials": c.alt_materials,
+                           "grid": [c.grid_rows, c.grid_cols] if c.method == "grid" else None,
                            "roi": c.roi} for c in self.components],
                 "ref_count": len(self.refs), "repeats": self.repeats, "board_id": self.board.board_id}
 
-    def image(self) -> np.ndarray | None:
+    def image(self, raw: bool = False) -> np.ndarray | None:
+        """Taught-so-far picture. raw=True leaves out the proposal box (the screen draws an editable one)."""
         img = self.pending if self.pending is not None else self.prev
         if img is None:
             return None
@@ -93,7 +95,7 @@ class LearnSession:
             cv2.rectangle(out, (x, y), (x + w, y + h), (255, 255, 255), 2)
             cv2.putText(out, f"{c.label} x{c.expected_count}", (x + 4, max(18, y - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        if self.proposal:
+        if self.proposal and not raw:
             x, y, w, h = self.proposal
             cv2.rectangle(out, (x, y), (x + w, y + h), (68, 96, 135), 5)
             cv2.putText(out, "NEW PART", (x + 4, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (68, 96, 135), 2)
@@ -114,13 +116,14 @@ class LearnSession:
         elif self.step == "part":
             f = self._align(frame)
             roi = find_added_part(self.prev, f)
-            if roi is None:
-                self.message = (f"No new part found - place part {len(self.components) + 1} in view "
-                                "(hands clear) and CAPTURE again")
+            self.pending, self.proposal = f, roi
+            self.step = "name"
+            if roi is None:      # e.g. a part that barely shows against the board: let the operator box it
+                self.message = ("Couldn't find the new part automatically - drag a box around the part area "
+                                "on the picture, then name it")
             else:
-                self.pending, self.proposal = f, roi
-                self.step = "name"
-                self.message = "Name this part (bronze box), enter part number and quantity, then SAVE PART"
+                self.message = ("Check the bronze box covers the whole part area (drag a new one if not), "
+                                "then name the part and SAVE PART")
         elif self.step == "undo":
             self.prev = self._align(frame)
             self.step = "part"
@@ -131,14 +134,40 @@ class LearnSession:
         return self.state()
 
     def name_part(self, label: str, part_number: str = "", qty: int = 1, material: str = "auto",
-                  alt_materials: list[str] | None = None) -> dict:
+                  alt_materials: list[str] | None = None, roi: list[int] | None = None,
+                  layout: str = "auto", rows: int = 0, cols: int = 0) -> dict:
+        """layout: single (one part) | loose (qty counted anywhere in the box) | grid (rows x cols, one per cell);
+        auto = single when qty is 1, else loose. roi = the box the operator drew (replaces the proposal)."""
         if self.step != "name" or not label.strip():
             self.message = "Enter a part name"
             return self.state()
+        if roi:
+            H, W = self.pending.shape[:2]
+            x, y, w, h = (int(round(float(v))) for v in roi)
+            x, y = max(0, min(x, W - 1)), max(0, min(y, H - 1))
+            w, h = min(w, W - x), min(h, H - y)
+            if w < 12 or h < 12:
+                self.message = "That box is too small - drag a box around the whole part area"
+                return self.state()
+            self.proposal = [x, y, w, h]
+        if not self.proposal:
+            self.message = "Drag a box around the part area on the picture first"
+            return self.state()
         qty = max(1, int(qty))
+        grid = {}
+        if layout == "grid":
+            rows, cols = int(rows or 0), int(cols or 0)
+            if not (1 <= rows <= 50 and 1 <= cols <= 50):
+                self.message = "Enter the grid's rows and columns"
+                return self.state()
+            method, qty, grid = "grid", rows * cols, {"grid_rows": rows, "grid_cols": cols}
+        elif layout == "single":
+            method, qty = "presence", 1
+        else:
+            method = "count" if qty > 1 else "presence"
         self.components.append(Component(
             id=f"c{len(self.components) + 1}", label=label.strip(), part_number=part_number.strip(),
-            roi=self.proposal, expected_count=qty, method="count" if qty > 1 else "presence",
+            roi=self.proposal, expected_count=qty, method=method, **grid,
             material=material if material in colour.MATERIALS else "auto",
             alt_materials=[m for m in (alt_materials or []) if m in ("steel", "black", "white") and m != material]))
         self.prev, self.pending, self.proposal = self.pending, None, None

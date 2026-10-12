@@ -144,8 +144,10 @@ def test_operator_learn_then_verify_workflow(tmp_path):
         r = c.post("/api/learn/part", json={"label": label, "qty": qty, "material": mat}).get_json()
         assert r["parts"][-1]["material"] == mat
         assert r["step"] == "part"
-    # capturing with nothing new placed must not invent a part
-    assert c.post("/api/learn/capture").get_json()["step"] == "part"
+    # capturing with nothing new placed must not invent a part: it asks the operator to draw one (or retry)
+    r = c.post("/api/learn/capture").get_json()
+    assert r["step"] == "name" and r["proposal"] is None
+    assert c.post("/api/learn/retry").get_json()["step"] == "part"
     assert c.post("/api/learn/parts_done").get_json()["step"] == "repeat"
     cam.frame = moved(demo.kitted(bare), 10, 5, 1.0, 1.0)
     assert c.post("/api/learn/capture").get_json()["step"] == "done"

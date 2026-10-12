@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-METHODS = ("presence", "count")
+METHODS = ("presence", "count", "grid")   # grid = one part per cell of a rows x cols matrix (e.g. 24 nylocs)
 MATERIALS = ("auto", "steel", "black", "white", "bag", "colour")
 
 
@@ -31,6 +31,9 @@ class Component:
     unit_area: float = 0.0           # count: learned px area of one part (set by calibrate)
     fg_level: float = 25.0           # colour-difference level that counts as "part" (set by calibrate)
     material: str = "auto"           # steel | black | white | bag | colour | auto - what the part usually looks like
+    grid_rows: int = 0               # grid method: rows x cols cells inside the box, one part per cell
+    grid_cols: int = 0
+    cell_fg: float = 0.0             # grid: learned share of a full cell that the part covers (set by calibrate)
     alt_materials: list[str] = field(default_factory=list)   # also-allowed variants, e.g. ["white"] for a bracket
                                                               # that is black 95% of the time
     colour_lab: list[float] | None = None   # learned median LAB colour of the part (set by calibrate)
@@ -49,6 +52,11 @@ class Component:
         if len(self.roi) != 4 or self.roi[2] <= 0 or self.roi[3] <= 0:
             raise ValueError(f"{self.id}: roi must be [x, y, w, h] with w,h > 0")
         self.roi = [int(v) for v in self.roi]
+        if self.method == "grid":
+            self.grid_rows, self.grid_cols = int(self.grid_rows), int(self.grid_cols)
+            if not (1 <= self.grid_rows <= 50 and 1 <= self.grid_cols <= 50):
+                raise ValueError(f"{self.id}: a grid needs 1-50 rows and 1-50 columns")
+            self.expected_count = self.grid_rows * self.grid_cols
 
 
 @dataclass
