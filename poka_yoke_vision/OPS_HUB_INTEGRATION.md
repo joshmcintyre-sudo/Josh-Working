@@ -1,88 +1,63 @@
-# Poka-yoke station → Ops Hub (Operations Hub V2)
+# Poka-yoke station ↔ Ops Hub (Operations Hub V2)
 
-Every check sends stamps to Ops Hub against the work/sales order, so the order shows it was kitted and checked.
+Ops Hub launches the station from an MES checklist step. The result comes back into that step, and the photo is archived through Ops Hub's existing Box link. The station does not upload to Box itself.
 
-## What already exists in Ops Hub (checked 12/10/2026)
+```text
+Ops Hub MES checklist (browser, logged in)          Station PC (this app, http://127.0.0.1:8080)
+ ─ step "Poka-yoke board check"
+ ─ [Launch Poka-Yoke check] ──creates pokayoke_launches row (launch_id)
+        └─ opens /launch?launch_id&order&model&operator&return ─▶ skips order/model scan, verifies board
+                                                                 ├─ PASS ─▶ "Now ready to bag and package kit"
+                                                                 └─ FAIL ─▶ fix / re-check / secondary QC confirm
+ ◀── pokayoke-ingest (edge function) ◀── started / completed / qc_confirmed + photo (queued, retried)
+ ─ step result written to qc_check_results (passed, value, notes, photo)
+ ─ box_upload_jobs → existing box-upload-worker → order's Box folder
+ ◀── [Return to Ops Hub] closes the station tab
+```
+
+## What Ops Hub already has (checked 12/10/2026)
 
 | Item | Detail |
 |---|---|
-| Orders | `production_orders.order_number` holds `W270530`, `S99289`... (401 W, 314 S). `order_type` = `work_order` / `sales_order`. Same format the station scans. |
-| Backend pattern | Writes go through backend (edge) functions; secrets server-side (see `AGENTS.md`, e.g. `cnc-job-request`, `service-issues`). |
-| Box | `box-upload-worker` + `box_upload_jobs` queue already archives QC files into one Box folder per order (`S96934 - VIN 123456/`). |
-| Secondary QC | `secondary_qc_findings`, `qc_closeout_log` exist for MES QC. |
+| Orders | `production_orders.order_number` = `W270530`, `S99289`...; `assembly_item` (from NetSuite) = the model, which is passed to the station |
+| Checklist steps | `qc_check_items.check_type`: `pass_fail` (249), `photo` (75), `yes_no` (40), `data_entry` (24), `multi_photo` (1). Built in `src/components/mes/ChecklistsTab.tsx` |
+| Step results | `qc_check_results` (order_id, checklist_id, check_item_id, item_number, passed, value, notes, photo_path, checked_by, checked_at) |
+| Box | `box-upload-worker` + `box_upload_jobs` already archive QC files per order |
+| Station address | `integration_connections` table (provider / base_url) |
 
-## Stamps the station sends
+## Station side (done)
 
-One `POST` (multipart) per event to the Ops Hub function. Field `record` = JSON; field `image` = annotated JPG (completed event only).
+- `GET /launch?launch_id=&order=&model=&operator=&checklist=&step=&return=` opens the operator screen and goes straight to verify when the model is taught (else learn mode, model pre-filled).
+- `return` is only honoured for origins in `ops_hub_origins` (default `https://*.lovable.app`; add your custom domain).
+- `GET /api/ping` answers Ops Hub with CORS and Private Network Access headers, so Ops Hub can check the app is running.
+- `pokayoke://launch?...` links start the app if it isn't running (`install_windows.bat` registers this and starts the app at login).
+- Every record carries `launch_id` and `launch` {checklist, step, model, source}. Events: `started`, `completed`, `qc_confirmed` (a re-check sends another `completed`; latest wins).
+- **Return to Ops Hub** button on the result screen.
 
-| `event` | When | Key fields |
-|---|---|---|
-| `started` | Verify begins (order + model scanned) - logs the order first | `session_id`, `order_ref`, `order_type`, `board_id`, `operator`, `started` |
-| `completed` | Camera result saved (auto-confirm or CONFIRM) | + `vision_result` PASS/FAIL/NO_RESULT, `result`, `inspection.components[]` (label, part no., expected, found, status), `finished`, image |
-| `qc_confirmed` | Secondary QC physically confirmed a failed board | `result: QC_CONFIRMED`, `qc.by`, `qc.note`, `qc.at`, `qc.statement` |
-
-All three share one `session_id`. `record_id` is unique per event, so retries are safe (upsert). Offline? The station queues and retries every 60 s.
-
-Example `completed` record:
+Station settings once Ops Hub is built:
 ```json
-{
-  "event": "completed", "record_id": "W234566_DEMO-HILUX-01_20261012-045906", "session_id": "a8a44ffb...",
-  "station": "PY-STATION-1", "order_ref": "W234566", "order_type": "WORK_ORDER", "board_id": "DEMO-HILUX-01",
-  "operator": "JM", "started": "2026-10-12T04:59:05", "finished": "2026-10-12T04:59:06",
-  "vision_result": "FAIL", "result": "FAIL", "qc": null,
-  "inspection": {"match_score": 0.98, "passed": false, "components": [
-    {"label": "M8 x 25 flange bolt", "part_number": "FAST-M8-25", "expected": 6, "found": 4, "status": "SHORT",
-     "message": "Need 2 more M8 x 25 flange bolt (FAST-M8-25)  (4/6)"}]}
-}
-```
-
-## Step 1 - Ops Hub side (paste into Lovable chat for Operations Hub V2)
-
-> Add a Poka-Yoke integration so our overhead camera kitting station can stamp work/sales orders.
->
-> 1. New table `pokayoke_inspections`: id uuid pk, record_id text unique not null, session_id text, event text ('started' | 'completed' | 'qc_confirmed'), order_number text not null, order_type text ('work_order' | 'sales_order', lower-cased from the payload), production_order_id uuid null references production_orders(id), station text, board_id text, operator text, vision_result text, final_result text, qc_by text, qc_note text, qc_at timestamptz, problems jsonb (components with status <> 'OK'), payload jsonb (full record), image_path text, started_at timestamptz, finished_at timestamptz, received_at timestamptz default now(). Index on (order_number, received_at desc). RLS: authenticated users can read; only the service role writes.
-> 2. New private storage bucket `pokayoke-images`.
-> 3. New backend function `pokayoke-ingest` with JWT verification OFF (the station is not a signed-in user). It must:
->    - reject unless header `x-pokayoke-key` equals secret `POKAYOKE_INGEST_KEY` (request the secret via the secure form);
->    - accept `multipart/form-data` with field `record` (JSON file) and optional field `image` (JPG);
->    - upsert into `pokayoke_inspections` on `record_id` (station retries must not duplicate);
->    - match `production_orders` on `upper(order_number)` and set `production_order_id` when found (keep the row even if no match);
->    - store the image at `pokayoke-images/<order_number>/<record_id>.jpg` and save `image_path`;
->    - return `{ok: true, production_order_id}`; 401 on a bad key, 400 on bad payload.
->    - Do NOT change `production_orders.status` (NetSuite/MES own that).
-> 4. UI: on the MES Orders tab and Work Order Lookup, show a "Poka-yoke" chip per order from the latest `pokayoke_inspections` row: Started (grey), PASS (green), FAIL (red), QC confirmed (white, with QC initials). Clicking opens the image, missing items list, operator, station and times.
-> 5. Box: when an event is `completed` or `qc_confirmed`, enqueue a `box_upload_jobs` row so the existing `box-upload-worker` copies the JPG + record JSON into that order's Box folder.
-> 6. Add a short note to AGENTS.md: poka-yoke stamps arrive only through `pokayoke-ingest`, keyed on `record_id`.
->
-> When done, tell me the full function URL.
-
-## Step 2 - Station side
-
-`settings.json`:
-```json
+"ops_hub_origins": ["https://*.lovable.app", "https://<your custom ops hub domain>"],
 "export": {
-  "webhook": {
-    "enabled": true,
-    "url": "https://<your-project>.supabase.co/functions/v1/pokayoke-ingest",
-    "token_header": "x-pokayoke-key",
-    "send_started": true,
-    "send_image": true
-  },
+  "webhook": {"enabled": true, "url": "https://<project>.supabase.co/functions/v1/pokayoke-ingest",
+              "token_header": "x-pokayoke-key", "send_started": true, "send_image": true},
   "box": {"enabled": false}
 }
 ```
-`secrets.json` (git-ignored) - same value you enter in Lovable's secret form:
-```json
-{"export": {"webhook": {"token": "<long random key>"}}}
-```
-Make a key: PowerShell `[guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")`.
+No key is needed for launched checks: the one-time `launch_id` authenticates them. A key (`POKAYOKE_INGEST_KEY` in Ops Hub, `token` in `secrets.json`) is only needed for checks started on the station itself.
 
-- Keep station `box.enabled: false` once Ops Hub step 5 is live, so Box gets one copy via Ops Hub's existing worker, not two.
-- Check delivery: `/log` "Export" column shows `sent: webhook` or `retrying (...)`.
+## Ops Hub build (sent to Lovable)
 
-## Step 3 - Test
+The prompt sent to the Operations Hub V2 project is in the session history and summarised here:
+1. New step type **Poka-yoke Board Check** (`check_type = 'pokayoke'`) in the checklist builder, with an optional model override per step.
+2. `pokayoke_launches` (one row per button press; its id is the `launch_id`) and `pokayoke_inspections` (every station event).
+3. QC execution: **Launch Poka-Yoke check** button → ping station → open `/launch` (or `pokayoke://` if it's not running) → live status → step passes on PASS / QC confirmed. Operators can't tick it manually.
+4. `pokayoke-ingest` edge function: validates `launch_id` (or the key), stores the event and photo, writes `qc_check_results`, queues Box upload through the existing worker.
+5. Integrations card: station URL and recent checks.
 
-1. Scan a real order (e.g. one from Ops Hub's Orders list) → model → verify.
-2. Ops Hub Orders tab: chip shows **Started**, then **PASS** / **FAIL** within a few seconds.
-3. Fail one on purpose → Secondary QC confirm → chip shows **QC confirmed (AB)**.
-4. Unplug network, run a check, reconnect → it arrives within 60 s.
+## Test plan
+
+1. Station PC: run `install_windows.bat`, teach one board whose Board ID or learned barcode = the order's assembly item.
+2. Ops Hub: add a Poka-yoke step to a test checklist (e.g. on order `TEST123`) → **Launch** → station opens on the verify screen.
+3. PASS → Return to Ops Hub → step shows PASS with photo; Box folder for the order gets the JPG.
+4. Remove a part → FAIL → step stays open with "Need 2 more ..." → Secondary QC confirm → step passes as QC confirmed.
+5. Close the station app → Launch again → `pokayoke://` starts it.

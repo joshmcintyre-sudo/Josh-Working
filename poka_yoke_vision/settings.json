@@ -20,6 +20,7 @@
   "camera_scan": true,
   "camera_scan_auto": true,
   "scan_fps": 5,
+  "ops_hub_origins": ["https://*.lovable.app"],
   "export": {
     "retry_seconds": 60,
     "webhook": {"enabled": false, "url": "https://<ops-hub-project>.supabase.co/functions/v1/pokayoke-ingest",

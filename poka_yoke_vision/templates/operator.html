@@ -91,7 +91,7 @@
     <div class="camscan" data-cam="qc"><img alt=""><div class="camline"><span class="camstate">Camera scanner off</span><button class="camtoggle">Scan with camera</button></div></div>
     <div class="row"><button class="cta" id="qcConfirm">Mark physically confirmed</button><button class="ghost" id="qcCancel">Cancel</button></div>
   </div>
-  <div class="row"><button class="huge" id="nextOrder">Next order</button></div>
+  <div class="row"><button class="huge" id="nextOrder">Next order</button><button class="cta huge" id="returnOps" hidden>Return to Ops Hub</button></div>
   <div id="file" class="file"></div>
 </section>
 
@@ -207,7 +207,7 @@ $("cancelLearn").onclick = () => confirm("Cancel learning? Nothing will be saved
 /* ---------- 4. verify ---------- */
 $("verifyBtn").onclick = () => startVerify();
 async function startVerify() {
-  try { await api("/api/start", {board_id: ctx.board.board_id, order_ref: ctx.order.order_ref, operator: ctx.operator}); }
+  try { await api("/api/start", {board_id: ctx.board.board_id, order_ref: ctx.order.order_ref, operator: ctx.operator, launch: ctx.launch}); }
   catch (e) { return fail(e); }
   show("verify"); $("video").src = "/video.mjpg?" + Date.now();
   $("banner").className = "banner idle"; $("banner").textContent = "Looking"; $("items").innerHTML = "";
@@ -237,6 +237,8 @@ $("cancelVerify").onclick = () => api("/api/cancel", {}).then(showModel);
 /* ---------- 5. result + secondary QC ---------- */
 function showResult(s) {
   show("result");
+  const fromOps = !!(ctx.launch && ctx.launch.return_url);
+  $("returnOps").hidden = !fromOps; $("nextOrder").hidden = fromOps;
   const res = s.last_result, pass = res === "PASS", qc = res === "QC_CONFIRMED";
   const cls = pass ? "pass" : qc ? "qc" : "fail";
   $("frame").className = "frame " + cls;
@@ -260,6 +262,11 @@ async function qcConfirm() {
 }
 $("qcConfirm").onclick = qcConfirm;
 onEnter("qcBy", () => $("qcNote").focus()); onEnter("qcNote", qcConfirm);
+$("returnOps").onclick = () => {
+  // Opened from Ops Hub in a new tab: close it so the operator lands back on the checklist.
+  if (window.opener) { window.close(); }
+  location.href = ctx.launch.return_url;
+};
 $("nextOrder").onclick = () => { ctx.board = null; ctx.order = null; show("idle"); };
 
 /* ---------- camera as barcode scanner ---------- */
@@ -311,8 +318,29 @@ document.querySelectorAll(".camscan").forEach(el => el.querySelector(".camtoggle
 
 let CFG = {camera_scan: true, camera_scan_auto: true};
 $("operator").value = ctx.operator;
+/* ---------- launched from an Ops Hub MES checklist step ---------- */
+const LAUNCH = {{ launch | tojson }};
+async function startFromLaunch(L) {
+  if (L.error) { show("idle"); return fail("Ops Hub launch: " + L.error); }
+  ctx.launch = L;
+  ctx.operator = L.operator || ctx.operator || prompt("Operator initials:") || "";
+  try { ctx.order = await api("/api/order?code=" + encodeURIComponent(L.order)); } catch (e) { show("idle"); return fail(e); }
+  await showModel();
+  if (L.model) {
+    await lookup(L.model).catch(fail);
+    if (ctx.board && ctx.board.taught) return startVerify();      // straight to the camera check
+    $("modelCard").innerHTML += "<br><span class=warnText>Ops Hub model: " + esc(L.model) + " - teach it once with LEARN MODE.</span>";
+  }
+}
+function opsBanner() {
+  if (!ctx.launch) return "";
+  return `Ops Hub <b>${esc(ctx.launch.checklist || "MES checklist")}</b>${ctx.launch.step ? " / " + esc(ctx.launch.step) : ""}`;
+}
+const _show = show;
+show = name => { _show(name); if (ctx.launch) $("crumbs").innerHTML = opsBanner() + " / " + $("crumbs").innerHTML; };
+
 api("/api/config").then(c => { CFG = c; document.querySelectorAll(".camscan").forEach(el => el.hidden = !c.camera_scan); })
-  .finally(() => show("idle"));
+  .finally(() => LAUNCH ? startFromLaunch(LAUNCH) : show("idle"));
 </script>
 </body>
 </html>

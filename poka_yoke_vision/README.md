@@ -24,7 +24,7 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 30 tests: vision, learn→verify, orders, QC, log, export/Ops Hub stamps, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 34 tests: vision, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
 ```
 
 ## Operator workflow (`/`) - scan order first
@@ -43,6 +43,12 @@ python -m pytest -q tests                                      # 30 tests: visio
 - **Barcode scanning:** any USB keyboard-wedge scanner (e.g. Zebra DS2208, Honeywell Voyager 1250g). Fields auto-focus; the scanner's Enter advances. Symbology prefixes (e.g. `]C1W234566`) are stripped. Order format is set by `order_types` / `order_pattern`.
 - Model barcode scanned in learn mode is remembered against the board.
 - Learn tips: hands out of view on each CAPTURE; one fastener type at a time with its qty (qty > 1 = counted); **Wrong area - retry**; **Undo last part**.
+
+## Launched from Ops Hub MES checklists
+
+An Ops Hub checklist step **Poka-yoke Board Check** opens this app on the station PC with the order and model already filled in. The station goes straight to verify, and the result goes back into that checklist step. The photo is archived to Box by Ops Hub's existing Box worker. Setup and flow: [OPS_HUB_INTEGRATION.md](OPS_HUB_INTEGRATION.md).
+- One-time on the station PC: `install_windows.bat` (starts the app at login and registers `pokayoke://` links).
+- `ops_hub_origins` lists which web apps may launch the station / receive the Return link.
 
 ## Camera as barcode scanner
 

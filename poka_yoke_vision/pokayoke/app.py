@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
+import re
+import urllib.parse
 import time
 from pathlib import Path
 
@@ -43,6 +46,8 @@ DEFAULTS = {
     "camera_scan": True,          # show "scan with camera" on order / model / QC screens
     "camera_scan_auto": True,     # start camera scanning automatically on those screens
     "scan_fps": 5,
+    # Ops Hub (or other web apps) allowed to launch this station and receive the "Return" link
+    "ops_hub_origins": ["https://*.lovable.app"],
     "export": {
         "retry_seconds": 60,
         "webhook": {"enabled": False, "url": "", "token": ""},
@@ -82,7 +87,48 @@ def create_app(station: Station) -> Flask:
     # ---------------- pages
     @app.get("/")
     def operator():
-        return render_template("operator.html", station=st.s["station_name"])
+        return render_template("operator.html", station=st.s["station_name"], launch=None)
+
+    def allowed_origin(url: str) -> str | None:
+        """'https://x.lovable.app/mes?...' -> 'https://x.lovable.app' if it matches ops_hub_origins."""
+        p = urllib.parse.urlparse(url or "")
+        origin = f"{p.scheme}://{p.netloc}" if p.scheme in ("http", "https") and p.netloc else ""
+        if origin and any(fnmatch.fnmatch(origin, pat) for pat in st.s.get("ops_hub_origins", [])):
+            return origin
+        return None
+
+    @app.get("/launch")
+    def launch():
+        """Opened by an Ops Hub MES checklist step:
+        /launch?launch_id=<uuid>&order=W234566&model=<assembly item>&operator=JM&step=...&return=<ops hub url>"""
+        a = request.args
+        try:
+            order = parse_order(a.get("order", ""), st.s["order_types"], st.s["order_pattern"])
+        except ValueError as e:
+            return render_template("operator.html", station=st.s["station_name"], launch={"error": str(e)})
+        ret = a.get("return", "")
+        launch = {
+            "launch_id": re.sub(r"[^A-Za-z0-9-]", "", a.get("launch_id", ""))[:64],
+            "order": order["order_ref"], "model": a.get("model", "").strip()[:80],
+            "operator": a.get("operator", "").strip()[:40], "step": a.get("step", "").strip()[:120],
+            "checklist": a.get("checklist", "").strip()[:120],
+            "return_url": ret if allowed_origin(ret) else "",
+            "source": "ops_hub",
+        }
+        return render_template("operator.html", station=st.s["station_name"], launch=launch)
+
+    @app.route("/api/ping", methods=["GET", "OPTIONS"])
+    def ping():
+        """Lets Ops Hub check the station app is running before launching it (CORS + Private Network Access)."""
+        origin = allowed_origin(request.headers.get("Origin", ""))
+        resp = jsonify({"ok": True, "station": st.s["station_name"], "mode": st.mode}) \
+            if request.method == "GET" else Response(status=204)
+        if origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Methods"] = "GET"
+            resp.headers["Access-Control-Allow-Private-Network"] = "true"
+            resp.headers["Vary"] = "Origin"
+        return resp
 
     @app.get("/teach")
     def teach():
@@ -116,7 +162,7 @@ def create_app(station: Station) -> Flask:
     def start():
         b = request.get_json(force=True)
         try:
-            st.start(b.get("board_id") or None, b.get("order_ref", ""), b.get("operator", ""))
+            st.start(b.get("board_id") or None, b.get("order_ref", ""), b.get("operator", ""), b.get("launch"))
         except Exception as e:
             return err(str(e))
         return jsonify(st.status())

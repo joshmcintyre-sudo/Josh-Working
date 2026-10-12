@@ -23,6 +23,14 @@ from .orders import parse_order
 from . import scanner
 
 
+def _clean_launch(launch: dict | None) -> dict | None:
+    """Ops Hub launch context carried on every record (launch_id ties the result to the checklist step)."""
+    if not launch or not launch.get("launch_id"):
+        return None
+    keep = ("launch_id", "source", "step", "checklist", "model")
+    return {k: str(launch.get(k, ""))[:120] for k in keep}
+
+
 class Camera:
     """Background grabber so we always process the newest frame (no USB buffer lag)."""
 
@@ -160,7 +168,7 @@ class Station:
         return frame
 
     # ------------------------------------------------ inspection session
-    def start(self, board_id: str | None, order_ref: str = "", operator: str = "") -> None:
+    def start(self, board_id: str | None, order_ref: str = "", operator: str = "", launch: dict | None = None) -> None:
         if self.mode == "inspect":
             return
         if board_id:
@@ -170,7 +178,8 @@ class Station:
         order = parse_order(order_ref, self.s.get("order_types"), self.s.get("order_pattern")) if order_ref else \
             {"order_ref": "", "order_type": ""}
         self.job = {"order_ref": order["order_ref"], "order_type": order["order_type"], "operator": operator,
-                    "started": datetime.now().isoformat(timespec="seconds"), "session_id": uuid.uuid4().hex}
+                    "started": datetime.now().isoformat(timespec="seconds"), "session_id": uuid.uuid4().hex,
+                    "launch": _clean_launch(launch)}
         self._send_started()
         self.history.clear()
         self.latest, self.last_file, self.error, self._pass_since = None, None, None, None
@@ -304,6 +313,8 @@ class Station:
         record = {
             "record_id": stem,
             "event": "completed",
+            "launch_id": (self.job.get("launch") or {}).get("launch_id"),
+            "launch": self.job.get("launch"),
             "session_id": self.job.get("session_id"),
             "station": self.s.get("station_name", platform.node()),
             "order_ref": self.job.get("order_ref", ""),
@@ -356,7 +367,8 @@ class Station:
         ev = {"event": "started", "record_id": f"{self.job['session_id']}_started",
               "session_id": self.job["session_id"], "station": self.s.get("station_name", platform.node()),
               "order_ref": self.job["order_ref"], "order_type": self.job["order_type"], "board_id": self.board_id,
-              "operator": self.job["operator"], "started": self.job["started"]}
+              "operator": self.job["operator"], "started": self.job["started"],
+              "launch_id": (self.job.get("launch") or {}).get("launch_id"), "launch": self.job.get("launch")}
         d = self.results_dir / "outbox" / "events"
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{ev['record_id']}.json"
