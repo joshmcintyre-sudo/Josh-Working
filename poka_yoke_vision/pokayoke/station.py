@@ -364,11 +364,22 @@ class Station:
         self._save(rec, suffix="_QC")
         return rec
 
+    def _targets(self, record: dict) -> list[str]:
+        """Where this record can actually go. Ops Hub only accepts a launched check (launch_id) or a
+        keyed one, so a standalone check with no key isn't queued to retry forever."""
+        if self.exporter is None:
+            return []
+        wh = self.s.get("export", {}).get("webhook", {})
+        return [t for t in self.exporter.targets()
+                if not (t == "webhook" and not wh.get("token") and not record.get("launch_id"))]
+
     def _send_started(self) -> None:
         """'Order logged / check started' stamp to the webhook (Ops Hub) as soon as verify begins."""
         wh = self.s.get("export", {}).get("webhook", {})
         if self.exporter is None or not wh.get("enabled") or not wh.get("send_started", True):
             return
+        if not wh.get("token") and not (self.job.get("launch") or {}).get("launch_id"):
+            return                                   # standalone check, no key: Ops Hub would refuse it
         ev = {"event": "started", "record_id": f"{self.job['session_id']}_started",
               "session_id": self.job["session_id"], "station": self.s.get("station_name", platform.node()),
               "order_ref": self.job["order_ref"], "order_type": self.job["order_type"], "board_id": self.board_id,
@@ -402,7 +413,10 @@ class Station:
                         record["result"], qc.get("by", ""), qc.get("note", ""), probs, str(json_path)])
 
         # log row first, so a fast background send can't be overwritten by a stale "queued" status
-        export = "queued" if self.exporter is not None and self.exporter.targets() else "not configured"
+        targets = self._targets(record)
+        export = "queued" if targets else (
+            "not sent: standalone check (no Ops Hub launch, no ingest key)"
+            if self.exporter is not None and self.exporter.targets() else "not configured")
         self.log.upsert({**record, "qc_by": qc.get("by"), "qc_note": qc.get("note"), "qc_at": qc.get("at"),
                          "final_result": record["result"], "problems": probs, "json_path": str(json_path),
                          "image_path": str(image_path) if image_path else "", "export_status": export})
@@ -413,7 +427,7 @@ class Station:
                 out = json_path.with_name(json_path.stem + suffix + ".json")
                 out.write_text(json.dumps(record, indent=2))
             self.exporter.enqueue({**record, "record_id": record["record_id"] + suffix}, out,
-                                  None if suffix else image_path)
+                                  None if suffix else image_path, only=targets)
 
     def status(self) -> dict:
         with self._lock:

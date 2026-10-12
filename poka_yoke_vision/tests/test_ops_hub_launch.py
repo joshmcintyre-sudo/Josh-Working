@@ -73,3 +73,14 @@ def test_protocol_link_maps_to_local_launch_page():
     assert to_http("pokayoke://launch?launch_id=a1&order=W234566&model=X%20Y", "http://127.0.0.1:8080") == \
         "http://127.0.0.1:8080/launch?launch_id=a1&order=W234566&model=X%20Y"
     assert to_http("pokayoke://", "http://127.0.0.1:8080") == "http://127.0.0.1:8080/"
+
+
+def test_standalone_check_without_key_is_not_queued(rig):
+    st, cam, c = rig
+    st.s["export"]["webhook"].update({"enabled": True, "url": "http://127.0.0.1:9/x", "token": ""})
+    st.exporter.webhook = st.s["export"]["webhook"]
+    c.post("/api/start", json={"board_id": "DEMO-HILUX-01", "order_ref": "W234566", "operator": "JM"})
+    time.sleep(0.4)
+    c.post("/api/stop")
+    assert not list((st.results_dir / "outbox" / "pending").glob("*.json"))
+    assert c.get("/api/log").get_json()[0]["export_status"].startswith("not sent: standalone")
