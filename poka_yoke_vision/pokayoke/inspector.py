@@ -379,7 +379,7 @@ def annotate(img: np.ndarray, res: InspectionResult) -> np.ndarray:
         (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         cv2.rectangle(out, (x, max(0, y - th - 8)), (x + tw + 6, y), col, -1)
         cv2.putText(out, tag, (x + 3, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, WHITE, 2)
-    banner = GREEN if res.passed else RED
+    banner = GREEN if res.passed else (AMBER if not res.lighting_ok else RED)
     cv2.rectangle(out, (0, 0), (out.shape[1], 44), banner, -1)
     cv2.putText(out, f"{res.board_id}: {res.message}", (12, 31), cv2.FONT_HERSHEY_SIMPLEX, 0.9, WHITE, 2)
     return out

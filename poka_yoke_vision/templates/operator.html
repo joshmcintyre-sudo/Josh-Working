@@ -233,7 +233,7 @@ async function tick() {
     const r = s.result; if (!r) return;
     $("banner").className = "banner " + (r.passed ? "pass" : r.lighting_ok === false ? "warn" : "fail");
     $("banner").textContent = r.passed ? "Pass" : r.lighting_ok === false ? "Check lighting" : (r.board_ok ? "Check" : "Wrong board");
-    $("frame").className = "frame " + (r.passed ? "pass" : "fail");
+    $("frame").className = "frame " + (r.passed ? "pass" : r.lighting_ok === false ? "warn" : "fail");
     $("items").innerHTML = items(r);
   } catch (e) { fail(e); }
 }
