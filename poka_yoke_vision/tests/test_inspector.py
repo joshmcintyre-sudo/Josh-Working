@@ -137,7 +137,7 @@ def test_operator_learn_then_verify_workflow(tmp_path):
         r = c.post("/api/learn/capture").get_json()
         assert r["step"] == "name", r
         assert _iou(r["proposal"], expected[label]) > 0.5, (label, r["proposal"])
-        want = {"Mounting bracket LH": "steel", "Door seal 450mm": "black", "Wiring loom bag": "colour",
+        want = {"Mounting bracket LH": "black", "Door seal 450mm": "black", "Wiring loom bag": "colour",
                 "M8 x 25 flange bolt": "black", "Cable tie bundle": "white"}[label]
         assert r["suggested_material"] == want, (label, r["suggested_material"])
         mat = "bag" if label == "Wiring loom bag" else want          # operator overrides: it's a bag

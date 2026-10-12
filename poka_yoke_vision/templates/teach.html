@@ -36,7 +36,7 @@
     </div>
     <div class="hint" id="info"></div>
     <table>
-      <thead><tr><th>Label</th><th>Part #</th><th>Qty</th><th>Method</th><th>Material</th><th>Thr</th></tr></thead>
+      <thead><tr><th>Label</th><th>Part #</th><th>Qty</th><th>Method</th><th>Material</th><th>Variants</th><th>Thr</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
     <button id="saveBtn" class="go">Save &amp; calibrate</button>
@@ -100,10 +100,12 @@ function rows() {
     <td><input data-k="expected_count" type="number" min="1" value="${c.expected_count}" style="width:52px"></td>
     <td><select data-k="method"><option ${c.method === "presence" ? "selected" : ""}>presence</option><option ${c.method === "count" ? "selected" : ""}>count</option></select></td>
     <td><select data-k="material">${["auto", "steel", "black", "white", "bag", "colour"].map(m => `<option ${(c.material || "auto") === m ? "selected" : ""}>${m}</option>`).join("")}</select></td>
+    <td><input data-k="alt_materials" value="${(c.alt_materials || []).join(",")}" placeholder="e.g. white" style="width:64px"></td>
     <td><input data-k="threshold" type="number" step="0.05" value="${c.threshold}" style="width:58px"></td></tr>`).join("");
   $("rows").querySelectorAll("input,select").forEach(el => el.onchange = e => {
     const i = +e.target.closest("tr").dataset.i, k = e.target.dataset.k;
-    board.components[i][k] = ["expected_count"].includes(k) ? parseInt(e.target.value) : k === "threshold" ? parseFloat(e.target.value) : e.target.value;
+    board.components[i][k] = ["expected_count"].includes(k) ? parseInt(e.target.value) : k === "threshold" ? parseFloat(e.target.value)
+      : k === "alt_materials" ? e.target.value.split(",").map(x => x.trim().toLowerCase()).filter(Boolean) : e.target.value;
     draw();
   });
   $("rows").querySelectorAll("tr").forEach(tr => tr.onclick = () => { sel = +tr.dataset.i; draw(); highlight(); });

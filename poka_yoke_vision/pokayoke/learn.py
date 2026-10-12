@@ -79,7 +79,8 @@ class LearnSession:
         return {"step": self.step, "message": self.message, "proposal": self.proposal,
                 "suggested_material": self._suggest() if self.step == "name" else None,
                 "parts": [{"label": c.label, "part_number": c.part_number, "qty": c.expected_count,
-                           "method": c.method, "material": c.material, "roi": c.roi} for c in self.components],
+                           "method": c.method, "material": c.material, "alt_materials": c.alt_materials,
+                           "roi": c.roi} for c in self.components],
                 "ref_count": len(self.refs), "repeats": self.repeats, "board_id": self.board.board_id}
 
     def image(self) -> np.ndarray | None:
@@ -129,7 +130,8 @@ class LearnSession:
             self._repeat_message()
         return self.state()
 
-    def name_part(self, label: str, part_number: str = "", qty: int = 1, material: str = "auto") -> dict:
+    def name_part(self, label: str, part_number: str = "", qty: int = 1, material: str = "auto",
+                  alt_materials: list[str] | None = None) -> dict:
         if self.step != "name" or not label.strip():
             self.message = "Enter a part name"
             return self.state()
@@ -137,7 +139,8 @@ class LearnSession:
         self.components.append(Component(
             id=f"c{len(self.components) + 1}", label=label.strip(), part_number=part_number.strip(),
             roi=self.proposal, expected_count=qty, method="count" if qty > 1 else "presence",
-            material=material if material in colour.MATERIALS else "auto"))
+            material=material if material in colour.MATERIALS else "auto",
+            alt_materials=[m for m in (alt_materials or []) if m in ("steel", "black", "white") and m != material]))
         self.prev, self.pending, self.proposal = self.pending, None, None
         self.step = "part"
         self.message = f"Saved. Load PART {len(self.components) + 1} and CAPTURE - or press ALL PARTS LOADED"

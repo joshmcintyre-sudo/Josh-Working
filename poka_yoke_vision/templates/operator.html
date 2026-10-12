@@ -28,6 +28,7 @@
   <input id="model" class="scan" placeholder="Scan model barcode" autocomplete="off">
   <select id="modelList"><option value="">Or pick from list</option></select>
   <div id="modelCard" class="hint" style="font-size:20px"></div>
+  <div id="variantBox" class="variants" hidden></div>
   <div class="row">
     <button class="cta huge" id="verifyBtn" disabled>Verify board</button>
     <button class="huge" id="learnBtn" disabled>Learn mode</button>
@@ -55,6 +56,11 @@
           <option value="steel">Steel / zinc / bright metal</option><option value="black">Black (rubber, black-oxide, plastic)</option>
           <option value="white">White (plastic, ties, labels)</option><option value="bag">Bag (clear or printed)</option>
           <option value="colour">Coloured (red clip, blue bag...)</option><option value="auto">Not sure / mixed</option>
+        </select></label>
+      <label>Also comes in (variant)
+        <select id="pAlt" class="scan small">
+          <option value="">No other colour</option><option value="white">White</option>
+          <option value="black">Black</option><option value="steel">Steel / zinc</option>
         </select></label>
       <div class="row"><button class="cta huge" id="savePart">Save part</button><button id="retryPart">Wrong area - retry</button></div>
     </div>
@@ -158,6 +164,23 @@ async function showModel() {
   $("modelList").innerHTML = '<option value="">Or pick from list</option>' + list.map(b =>
     `<option value="${esc(b.board_id)}">${esc(b.product_line ? b.product_line + " / " : "")}${esc(b.name)} [${esc(b.board_id)}]</option>`).join("");
 }
+// Parts with colour variants (e.g. bracket black 95% / white): pick what THIS order needs, or accept any allowed.
+function renderVariants(list) {
+  const want = {};
+  String((ctx.launch && ctx.launch.variants) || "").split(",").forEach(p => { const [k, v] = p.split(":"); if (k && v) want[k.trim().toLowerCase()] = v.trim().toLowerCase(); });
+  $("variantBox").hidden = !list.length;
+  $("variantBox").innerHTML = list.length ? `<div class="step">Colour variant for this order</div>` + list.map(v => {
+    const pre = want[v.id.toLowerCase()] || want[v.label.toLowerCase()] || "";
+    return `<label>${esc(v.label)} <select data-variant="${esc(v.id)}">
+      <option value="">Any allowed (usually ${esc(v.usual)})</option>
+      ${v.options.map(o => `<option value="${esc(o)}" ${pre === o ? "selected" : ""}>${esc(o)} only</option>`).join("")}
+    </select></label>`; }).join("") : "";
+}
+function chosenVariants() {
+  const out = {};
+  document.querySelectorAll("#variantBox select").forEach(s => { if (s.value) out[s.dataset.variant] = s.value; });
+  return out;
+}
 async function lookup(code) {
   if (!code) return;
   const r = await api("/api/lookup?code=" + encodeURIComponent(code));
@@ -167,6 +190,7 @@ async function lookup(code) {
     : `<span class=warnText>Model "${esc(code)}" is new. Use learn mode to teach it.</span>`;
   $("verifyBtn").disabled = !r.taught; $("learnBtn").disabled = false;
   show("model"); $("model").value = code;
+  renderVariants(r.variants || []);
   (r.taught ? $("verifyBtn") : $("learnBtn")).focus();
 }
 onEnter("model", () => lookup($("model").value.trim()).catch(fail));
@@ -191,9 +215,9 @@ function renderLearn(s) {
   $("captureRow").hidden = !["empty", "part", "repeat", "undo"].includes(s.step);
   $("partsDone").hidden = $("undoPart").hidden = s.step !== "part" || !s.parts.length;
   $("saveBoard").hidden = s.step !== "done";
-  $("learnParts").innerHTML = s.parts.map(p => `<li>${p.qty} x ${esc(p.label)} <span class=hint>${esc(p.part_number)} · ${esc(p.material)}</span></li>`).join("");
+  $("learnParts").innerHTML = s.parts.map(p => `<li>${p.qty} x ${esc(p.label)} <span class=hint>${esc(p.part_number)} · ${esc(p.material)}${p.alt_materials && p.alt_materials.length ? " (or " + esc(p.alt_materials.join(", ")) + ")" : ""}</span></li>`).join("");
   $("learnImg").src = s.step === "empty" ? "" : "/api/learn/image.jpg?" + Date.now();
-  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; $("pMat").value = s.suggested_material || "auto"; $("pLabel").focus(); }
+  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; $("pMat").value = s.suggested_material || "auto"; $("pAlt").value = ""; $("pLabel").focus(); }
   else if (s.step === "done") $("saveBoard").focus(); else $("captureBtn").focus();
 }
 const L = (action, body) => api("/api/learn/" + action, body || {}).then(renderLearn).catch(fail);
@@ -201,7 +225,7 @@ $("captureBtn").onclick = () => L("capture");
 $("partsDone").onclick = () => L("parts_done");
 $("undoPart").onclick = () => confirm("Remove the last taught part?") && L("undo");
 $("retryPart").onclick = () => L("retry");
-const savePart = () => { if (!$("pLabel").value.trim()) return fail("Enter a part name"); L("part", {label: $("pLabel").value, part_number: $("pNum").value, qty: $("pQty").value, material: $("pMat").value}); };
+const savePart = () => { if (!$("pLabel").value.trim()) return fail("Enter a part name"); L("part", {label: $("pLabel").value, part_number: $("pNum").value, qty: $("pQty").value, material: $("pMat").value, alt_materials: $("pAlt").value ? [$("pAlt").value] : []}); };
 $("savePart").onclick = savePart;
 onEnter("pLabel", () => $("pNum").focus()); onEnter("pNum", () => $("pQty").focus()); onEnter("pQty", savePart);
 $("saveBoard").onclick = async () => {
@@ -213,7 +237,7 @@ $("cancelLearn").onclick = () => confirm("Cancel learning? Nothing will be saved
 /* ---------- 4. verify ---------- */
 $("verifyBtn").onclick = () => startVerify();
 async function startVerify() {
-  try { await api("/api/start", {board_id: ctx.board.board_id, order_ref: ctx.order.order_ref, operator: ctx.operator, launch: ctx.launch}); }
+  try { await api("/api/start", {board_id: ctx.board.board_id, order_ref: ctx.order.order_ref, operator: ctx.operator, launch: ctx.launch, variants: chosenVariants()}); }
   catch (e) { return fail(e); }
   show("verify"); $("video").src = "/video.mjpg?" + Date.now();
   $("banner").className = "banner idle"; $("banner").textContent = "Looking"; $("items").innerHTML = "";
@@ -224,7 +248,7 @@ function items(r, onlyBad) {
   if (!r.board_ok) return `<li class="${r.lighting_ok === false ? "GLARE" : "MISSING"}">${esc(r.message)}</li>`;
   const order = {MISSING: 0, SHORT: 1, EXTRA: 2, OK: 3};
   return [...r.components].filter(c => !onlyBad || c.status !== "OK").sort((a, c) => order[a.status] - order[c.status])
-    .map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${esc(c.status === "OK" ? c.label : c.message)}</li>`).join("");
+    .map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${esc(c.status === "OK" && !c.variant ? c.label : c.message)}</li>`).join("");
 }
 async function tick() {
   try {
@@ -251,7 +275,9 @@ function showResult(s) {
   $("resultBanner").className = "banner " + cls;
   $("resultBanner").textContent = pass ? "Board confirmed" : qc ? "QC confirmed" : res === "NO_RESULT" ? "Unable to confirm" : "Items missing";
   $("resultMsg").textContent = s.prompt || "";
-  $("resultItems").innerHTML = pass ? "" : items(s.result, true);
+  $("resultItems").innerHTML = pass   // on PASS, still show any non-usual colour variant that was used
+    ? (s.result ? items({...s.result, components: s.result.components.filter(c => c.variant)}) : "")
+    : items(s.result, true);
   if (qc) $("resultItems").innerHTML += `<li class="OK"><b>QC</b> Physically confirmed by ${esc(s.qc.by)} at ${esc(s.qc.at.slice(11, 19))}${s.qc.note ? " - " + esc(s.qc.note) : ""}</li>`;
   $("failActions").hidden = pass || qc; $("qcBox").hidden = true;
   $("file").innerHTML = s.last_file ? `Saved: <code>${esc(s.last_file)}</code>` : "";

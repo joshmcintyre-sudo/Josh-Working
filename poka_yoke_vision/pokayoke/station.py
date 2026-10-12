@@ -169,7 +169,8 @@ class Station:
         return frame
 
     # ------------------------------------------------ inspection session
-    def start(self, board_id: str | None, order_ref: str = "", operator: str = "", launch: dict | None = None) -> None:
+    def start(self, board_id: str | None, order_ref: str = "", operator: str = "", launch: dict | None = None,
+              variants: dict | str | None = None) -> None:
         if self.mode == "inspect":
             return
         if board_id:
@@ -181,6 +182,9 @@ class Station:
         self.job = {"order_ref": order["order_ref"], "order_type": order["order_type"], "operator": operator,
                     "started": datetime.now().astimezone().isoformat(timespec="seconds"), "session_id": uuid.uuid4().hex,
                     "launch": _clean_launch(launch)}
+        if self.inspector is not None:          # (board may still be chosen later from its QR label)
+            self.inspector.variants = self._resolve_variants(variants or (launch or {}).get("variants"))
+            self.job["variants"] = dict(self.inspector.variants)
         self._send_started()
         self.history.clear()
         self.latest, self.last_file, self.error, self._pass_since = None, None, None, None
@@ -189,6 +193,19 @@ class Station:
         self._ensure_camera()
         self.mode = "inspect"
         self._start_loop()
+
+    def _resolve_variants(self, variants: dict | str | None) -> dict[str, str]:
+        """{"c1": "white"} or "Mounting bracket LH:white,c4:black" -> {component id: material}, only for
+        components that list that material as their usual or an allowed variant."""
+        if isinstance(variants, str):
+            variants = dict(p.split(":", 1) for p in variants.split(",") if ":" in p)
+        out = {}
+        for key, mat in (variants or {}).items():
+            key, mat = str(key).strip().lower(), str(mat).strip().lower()
+            for c in self.inspector.board.components:
+                if key in (c.id.lower(), c.label.lower()) and mat in [c.material] + list(c.alt_materials):
+                    out[c.id] = mat
+        return out
 
     def stop(self) -> dict | None:
         if self.mode != "inspect":
@@ -291,8 +308,8 @@ class Station:
             key = Counter((r.components[i].found, r.components[i].status) for r in frames).most_common(1)[0][0]
             pick = next(r.components[i] for r in reversed(frames) if (r.components[i].found, r.components[i].status) == key)
             score = float(np.mean([r.components[i].score for r in frames]))
-            comps.append(component_status(c, pick.found, score) if pick.status in ("OK", "MISSING", "SHORT", "EXTRA")
-                         else replace(pick, score=round(score, 3)))
+            plain = pick.status in ("OK", "MISSING", "SHORT", "EXTRA") and not pick.variant
+            comps.append(component_status(c, pick.found, score) if plain else replace(pick, score=round(score, 3)))
         bad = [c for c in comps if c.status != "OK"]
         msg = "PASS - board complete" if not bad else f"FAIL - {len(bad)} item(s) to fix"
         return InspectionResult(last.board_id, True, last.match_score, not bad, comps, msg)
@@ -318,6 +335,7 @@ class Station:
         record = {
             "record_id": stem,
             "event": "completed",
+            "variants": self.job.get("variants") or {},
             "launch_id": (self.job.get("launch") or {}).get("launch_id"),
             "launch": self.job.get("launch"),
             "session_id": self.job.get("session_id"),

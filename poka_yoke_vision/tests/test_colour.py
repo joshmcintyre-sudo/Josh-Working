@@ -29,8 +29,8 @@ def white_seal(img):            # a white seal strip where the black one belongs
     cv2.rectangle(img, (450, 130), (900, 170), (240, 240, 240), -1); return img
 
 
-def black_bracket(img):         # black-plastic bracket where the zinc one belongs
-    cv2.rectangle(img, (120, 120), (330, 230), (30, 30, 32), -1); return img
+def zinc_bracket(img):          # bare zinc bracket: not one of the bracket's allowed colours
+    cv2.rectangle(img, (120, 120), (330, 230), (170, 170, 175), -1); return img
 
 
 def zinc_bolts(img):            # bright zinc bolts where black-oxide ones belong
@@ -49,7 +49,8 @@ def black_ties(img):
 
 @pytest.mark.parametrize("name,make,label,should,looks", [
     ("white seal in black slot", lambda: white_seal(board(seal=False)), "Door seal 450mm", "black", "white"),
-    ("black bracket for zinc", lambda: black_bracket(board(bracket=False)), "Mounting bracket LH", "steel", "black"),
+    ("zinc bracket (not black or white)", lambda: zinc_bracket(board(bracket=False)), "Mounting bracket LH",
+     "black or white", "grey"),
     ("zinc bolts for black", lambda: zinc_bolts(board(bolts=0)), "M8 x 25 flange bolt", "black", "grey"),
     ("red bag for blue", lambda: red_bag(board(loom=False)), "Wiring loom bag", "blue", "red"),
     ("black ties for white", lambda: black_ties(board(ties=False)), "Cable tie bundle", "white", "black"),
@@ -87,7 +88,7 @@ def test_good_board_and_suggestions(insp):
     res, _ = insp.inspect(board())
     assert res.passed, [c.message for c in res.problems]
     seen = {c.label: colour.suggest(c.colour_lab) for c in insp.board.components}
-    assert seen == {"Mounting bracket LH": "steel", "Door seal 450mm": "black", "Wiring loom bag": "colour",
+    assert seen == {"Mounting bracket LH": "black", "Door seal 450mm": "black", "Wiring loom bag": "colour",
                     "M8 x 25 flange bolt": "black", "Cable tie bundle": "white"}
 
 
@@ -118,3 +119,81 @@ def test_station_keeps_wrong_part_through_vote_and_saves_it(tmp_path):
     seal = next(x for x in rec["inspection"]["components"] if x["label"] == "Door seal 450mm")
     assert rec["result"] == "FAIL" and seal["status"] == "WRONG_PART" and "looks white" in seal["message"]
     st.cancel()
+
+
+# ---- colour variants: bracket is black 95% of the time, occasionally white
+@pytest.fixture()
+def fresh(insp):
+    insp.variants = {}
+    yield insp
+    insp.variants = {}
+
+
+def test_white_bracket_variant_accepted_and_recorded(fresh):
+    res, _ = fresh.inspect(board(bracket="white"))
+    br = by_label(res)["Mounting bracket LH"]
+    assert res.passed and br.status == "OK" and br.variant == "white" and "white variant" in br.message
+
+
+def test_black_bracket_is_the_usual_no_variant_flag(fresh):
+    br = by_label(fresh.inspect(board())[0])["Mounting bracket LH"]
+    assert br.status == "OK" and br.variant is None
+
+
+@pytest.mark.parametrize("want,placed,ok,msg", [
+    ("white", "white", True, ""), ("white", "black", False, "should be white for this order, this looks black"),
+    ("black", "black", True, ""), ("black", "white", False, "should be black, this looks white"),
+])
+def test_order_requires_a_specific_variant(fresh, want, placed, ok, msg):
+    fresh.variants = {"c1": want}
+    br = by_label(fresh.inspect(board(bracket=placed))[0])["Mounting bracket LH"]
+    assert (br.status == "OK") == ok, br.message
+    assert msg in br.message
+
+
+@pytest.mark.parametrize("cond", ["dim_50", "warm_wb", "gradient_lr", "soft_shadow", "exposure_curve", "noisy"])
+def test_variants_hold_in_bad_light(fresh, cond):
+    res, _ = fresh.inspect(CONDITIONS[cond](board(bracket="white")))
+    assert by_label(res)["Mounting bracket LH"].variant == "white" and res.passed, cond
+    fresh.variants = {"c1": "black"}
+    res, _ = fresh.inspect(CONDITIONS[cond](board(bracket="white")))
+    assert by_label(res)["Mounting bracket LH"].status == "WRONG_PART", cond
+    res, _ = fresh.inspect(CONDITIONS[cond](board(bracket=False)))
+    assert by_label(res)["Mounting bracket LH"].status == "MISSING", cond
+
+
+def test_variant_from_ops_hub_launch_and_station_record(tmp_path):
+    import json, re, time
+    from pokayoke.app import DEFAULTS, _merge, create_app
+    from pokayoke.station import FileCamera, Station
+    demo.build(tmp_path / "b", tmp_path / "i")
+    cam = FileCamera("x")
+    cam.frame = board()                                    # usual black bracket on the board
+    st = Station(_merge(DEFAULTS, {"boards_dir": str(tmp_path / "b"), "results_dir": str(tmp_path / "r"),
+                                   "fps": 10, "stable_frames": 2, "auto_stop_pass_seconds": 0}), cam)
+    c = create_app(st).test_client()
+    look = c.get("/api/lookup?code=DEMO-HILUX-01").get_json()
+    assert look["variants"] == [{"id": "c1", "label": "Mounting bracket LH", "usual": "black", "options": ["black", "white"]}]
+    page = c.get("/launch?launch_id=ab-1&order=W234566&model=DEMO-HILUX-01&variants=Mounting%20bracket%20LH:white").data
+    launch = json.loads(re.search(rb"const LAUNCH = (.*?);\n", page).group(1))
+    assert launch["variants"] == "Mounting bracket LH:white"
+    c.post("/api/start", json={"board_id": "DEMO-HILUX-01", "order_ref": "W234566", "operator": "JM", "launch": launch})
+    time.sleep(0.6)
+    rec = c.post("/api/stop").get_json()
+    br = next(x for x in rec["inspection"]["components"] if x["label"] == "Mounting bracket LH")
+    assert rec["variants"] == {"c1": "white"} and br["status"] == "WRONG_PART" and "for this order" in br["message"]
+    # operator picks "any allowed" from the screen: the white one passes and is recorded as the white variant
+    cam.frame = board(bracket="white")
+    c.post("/api/start", json={"board_id": "DEMO-HILUX-01", "order_ref": "W234567", "operator": "JM", "variants": {}})
+    time.sleep(0.6)
+    rec = c.post("/api/stop").get_json()
+    br = next(x for x in rec["inspection"]["components"] if x["label"] == "Mounting bracket LH")
+    assert rec["result"] == "PASS" and br["variant"] == "white"
+    st.cancel()
+
+
+def test_bad_variant_setting_refused():
+    from pokayoke.board import Component
+    with pytest.raises(ValueError):
+        Component("x", "Seal", [0, 0, 10, 10], material="black", alt_materials=["bag"])
+    assert Component("x", "Seal", [0, 0, 10, 10], material="black", alt_materials=["black", "white", "white"]).alt_materials == ["white"]

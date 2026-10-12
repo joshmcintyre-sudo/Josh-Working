@@ -30,7 +30,9 @@ class Component:
     threshold: float = 0.5           # presence: 0..1 decision point (0.5 = halfway between empty and full)
     unit_area: float = 0.0           # count: learned px area of one part (set by calibrate)
     fg_level: float = 25.0           # colour-difference level that counts as "part" (set by calibrate)
-    material: str = "auto"           # steel | black | white | bag | colour | auto - what the part always looks like
+    material: str = "auto"           # steel | black | white | bag | colour | auto - what the part usually looks like
+    alt_materials: list[str] = field(default_factory=list)   # also-allowed variants, e.g. ["white"] for a bracket
+                                                              # that is black 95% of the time
     colour_lab: list[float] | None = None   # learned median LAB colour of the part (set by calibrate)
     ref_fg_area: float = 0.0         # learned px area that differs from the empty board (set by calibrate)
     ref_mat_area: float = 0.0        # learned px area that matches the material rule (set by calibrate)
@@ -40,6 +42,10 @@ class Component:
             raise ValueError(f"{self.id}: method must be one of {METHODS}")
         if self.material not in MATERIALS:
             raise ValueError(f"{self.id}: material must be one of {MATERIALS}")
+        self.alt_materials = [m for m in dict.fromkeys(self.alt_materials or []) if m != self.material]
+        bad = [m for m in self.alt_materials if m not in ("steel", "black", "white")]
+        if bad:
+            raise ValueError(f"{self.id}: variant materials must be steel / black / white, not {bad}")
         if len(self.roi) != 4 or self.roi[2] <= 0 or self.roi[3] <= 0:
             raise ValueError(f"{self.id}: roi must be [x, y, w, h] with w,h > 0")
         self.roi = [int(v) for v in self.roi]

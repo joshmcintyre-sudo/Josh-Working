@@ -34,10 +34,12 @@ def bare_board(seed: int = 7) -> np.ndarray:
 
 def kitted(img: np.ndarray, bracket=True, seal=True, loom=True, bolts=6, ties=True) -> np.ndarray:
     out = img.copy()
-    if bracket:  # zinc bracket
-        cv2.rectangle(out, (120, 120), (330, 230), (170, 170, 175), -1)
-        cv2.rectangle(out, (120, 120), (330, 230), (90, 90, 95), 3)
-        cv2.circle(out, (160, 175), 12, (60, 60, 60), -1); cv2.circle(out, (290, 175), 12, (60, 60, 60), -1)
+    if bracket:  # powder-coated bracket: black 95% of the time, white variant occasionally (bracket="white")
+        body, rim, hole = ((236, 237, 239), (200, 201, 204), (120, 120, 122)) if bracket == "white" else \
+            ((32, 32, 34), (70, 70, 74), (95, 95, 98))
+        cv2.rectangle(out, (120, 120), (330, 230), body, -1)
+        cv2.rectangle(out, (120, 120), (330, 230), rim, 3)
+        cv2.circle(out, (160, 175), 12, hole, -1); cv2.circle(out, (290, 175), 12, hole, -1)
     if seal:     # black EPDM seal strip
         cv2.rectangle(out, (450, 130), (900, 170), (25, 25, 25), -1)
     if loom:     # loom in clear-ish blue bag
@@ -55,7 +57,8 @@ def kitted(img: np.ndarray, bracket=True, seal=True, loom=True, bolts=6, ties=Tr
 
 def components() -> list[Component]:
     return [
-        Component("c1", "Mounting bracket LH", [110, 110, 230, 130], 1, "presence", "BRK-0412", material="steel"),
+        Component("c1", "Mounting bracket LH", [110, 110, 230, 130], 1, "presence", "BRK-0412", material="black",
+                  alt_materials=["white"]),
         Component("c2", "Door seal 450mm", [440, 120, 470, 60], 1, "presence", "SEAL-EPDM-450", material="black"),
         Component("c3", "Wiring loom bag", [940, 90, 250, 250], 1, "presence", "LOOM-RR-02", material="bag"),
         Component("c4", "M8 x 25 flange bolt", [270, 490, 290, 60], 6, "count", "FAST-M8-25", material="black"),

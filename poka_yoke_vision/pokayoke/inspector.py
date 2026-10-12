@@ -103,6 +103,7 @@ class ComponentResult:
     score: float
     message: str
     roi: list[int]
+    variant: str | None = None   # which allowed variant was seen when it isn't the usual one (e.g. "white")
 
 
 @dataclass
@@ -138,9 +139,13 @@ def component_status(c: Component, found: int, score: float) -> ComponentResult:
     return ComponentResult(c.id, c.label, c.part_number, exp, found, st, round(score, 3), msg, c.roi)
 
 
-def wrong_part(c: Component, seen: list[float] | None, score: float) -> ComponentResult:
-    want = c.material if c.material in colour.RULED and c.material != "colour" else colour.describe(c.colour_lab)
-    msg = f"WRONG PART? {c.label} should be {want}, this looks {colour.describe(seen)}"
+def wrong_part(c: Component, seen: list[float] | None, score: float, want: str | None = None) -> ComponentResult:
+    usual = c.material if c.material in colour.RULED and c.material != "colour" else colour.describe(c.colour_lab)
+    if want and want != c.material:
+        want_txt = f"{want} for this order" if " or " not in want else want
+    else:
+        want_txt = usual
+    msg = f"WRONG PART? {c.label} should be {want_txt}, this looks {colour.describe(seen)}"
     return ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "WRONG_PART", round(score, 3), msg, c.roi)
 
 
@@ -153,6 +158,7 @@ class Inspector:
             raise ValueError(f"Board {board.board_id} has no reference image - teach it first")
         self.empty = board.empty()
         self.base = self.refs[0]
+        self.variants: dict[str, str] = {}      # component id -> material this check requires (from the order)
         # Align on the bare board when we have it: its features don't change when parts go missing.
         self.aligner = Aligner(self.empty if self.empty is not None else self.base) if board.align else None
         # Bare-board area (outside every part box): confirms the right board and measures the lighting.
@@ -252,7 +258,12 @@ class Inspector:
         fg = _fg_mask(patch, empty_patch, c.fg_level)
         if c.material not in colour.RULED:
             return fg
-        rule = colour.class_mask(_lab(cv2.GaussianBlur(patch, (3, 3), 0)), c.material, c.colour_lab)
+        lab = _lab(cv2.GaussianBlur(patch, (3, 3), 0))
+        allowed = self._allowed(c) if hasattr(self, "variants") else [c.material]
+        rule = np.zeros(fg.shape, bool)
+        for m in allowed:                                  # any allowed variant counts (black or zinc bolts...)
+            r = colour.class_mask(lab, m, c.colour_lab if m == c.material else None)
+            rule |= r if r is not None else (fg > 0)
         n, lab_ids, stats, _ = cv2.connectedComponentsWithStats(fg)
         keep = np.zeros(n, bool)
         for i in range(1, n):
@@ -267,7 +278,14 @@ class Inspector:
         return fg if rule is None else (fg & rule)
 
     # ---- per component checks
+    def _allowed(self, c: Component) -> list[str]:
+        """Materials accepted on this check: the one the order asks for, else the usual one + its variants."""
+        want = self.variants.get(c.id)
+        return [want] if want else [c.material] + list(c.alt_materials)
+
     def _presence(self, c: Component, live: np.ndarray):
+        """-> (found, score, info); info may hold 'variant' (allowed non-usual variant seen) or 'wrong'
+        (median colour of a wrong part) + 'want' (what was expected)."""
         p = _crop(live, c.roi)
         d_full = min(_patch_dist(p, _crop(r, c.roi)) for r in self.refs)
         if self.empty is not None:
@@ -276,23 +294,39 @@ class Inspector:
         else:
             score = float(np.clip(1.0 - d_full * 2, 0, 1))         # similarity to reference only
         found = c.expected_count if score >= c.threshold else 0
+        if self.empty is None or c.ref_fg_area <= 0:
+            return found, score, {}
+        allowed = self._allowed(c)
+        e = _crop(self.empty, c.roi)
+        seen, something_there = self._something(c, p, e)
         wrong = None
-        if self.empty is not None and c.ref_fg_area > 0:
-            e = _crop(self.empty, c.roi)
-            seen, something_there = self._something(c, p, e)
-            if c.material in colour.RULED and c.ref_mat_area > 0:
-                mat_area = int(self._material_mask(c, p, e).sum())
-                if mat_area < 0.4 * c.ref_mat_area:
-                    found = 0                                      # not enough of the right colour
-                    if something_there and mat_area < 0.25 * c.ref_mat_area:
-                        wrong = seen
-            elif something_there and colour.distance(seen, c.colour_lab) > colour.PROFILE_TOL.get(c.material, 45):
-                found, wrong = 0, seen
-        return (found, score) if wrong is None else (found, score, wrong)
+        # 1) the usual material (learned colour profile)
+        if c.material in colour.RULED and c.ref_mat_area > 0:
+            mat_area = int(self._material_mask(c, p, e).sum())
+            if mat_area < 0.4 * c.ref_mat_area:
+                found = 0                                          # not enough of the usual colour
+                if something_there and mat_area < 0.25 * c.ref_mat_area:
+                    wrong = seen
+        elif something_there and colour.distance(seen, c.colour_lab) > colour.PROFILE_TOL.get(c.material, 45):
+            found, wrong = 0, seen
+        if found and c.material in allowed:
+            return found, score, {}
+        if found:                                                  # usual part there, but this order wants a variant
+            return 0, score, {"wrong": c.colour_lab, "want": allowed[0]}
+        # 2) an allowed variant (e.g. the white version of a usually-black bracket)
+        fg = _fg_mask(p, e, min(c.fg_level, SOMETHING)) > 0
+        lab = _lab(cv2.GaussianBlur(p, (3, 3), 0))
+        for m in [m for m in allowed if m != c.material]:
+            if (fg & colour.class_mask(lab, m)).sum() >= 0.5 * c.ref_fg_area:
+                return c.expected_count, score, {"variant": m}
+        if wrong is not None or (something_there and set(allowed) != {c.material}):
+            return 0, score, {"wrong": seen, "want": " or ".join(allowed)}
+        return 0, score, {}
 
     def _count(self, c: Component, live: np.ndarray):
         if self.empty is None or c.unit_area <= 0:
             return self._presence(c, live)
+        allowed = self._allowed(c)
         mask = self._count_mask(c, _crop(live, c.roi), _crop(self.empty, c.roi))
         area = cv2.countNonZero(mask)
         n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
@@ -302,8 +336,8 @@ class Inspector:
         if found == 0 and c.material in colour.RULED and c.ref_fg_area > 0:
             seen, something_there = self._something(c, _crop(live, c.roi), _crop(self.empty, c.roi))
             if something_there:                                # parts are there, but the wrong colour
-                return 0, 0.0, seen
-        return found, area / (c.unit_area * c.expected_count)
+                return 0, 0.0, {"wrong": seen, "want": " or ".join(allowed)}
+        return found, area / (c.unit_area * c.expected_count), {}
 
     def inspect(self, frame: np.ndarray, board_ok_override: bool | None = None):
         """Return (InspectionResult, aligned_frame)."""
@@ -346,9 +380,12 @@ class Inspector:
                 comps.append(ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "GLARE", 0.0,
                                              f"Can't see {c.label} - glare, adjust the light", c.roi))
                 continue
-            found, s, *wrong = (self._count if c.method == "count" else self._presence)(c, live)
-            if wrong:
-                comps.append(wrong_part(c, wrong[0], s))
+            found, s, info = (self._count if c.method == "count" else self._presence)(c, live)
+            if "wrong" in info:
+                comps.append(wrong_part(c, info["wrong"], s, info.get("want")))
+            elif info.get("variant") and found == c.expected_count:
+                comps.append(ComponentResult(c.id, c.label, c.part_number, c.expected_count, found, "OK", round(s, 3),
+                                             f"{c.label}: OK ({info['variant']} variant)", c.roi, info["variant"]))
             else:
                 comps.append(component_status(c, found, s))
         bad = [r for r in comps if r.status != "OK"]

@@ -112,6 +112,8 @@ def create_app(station: Station) -> Flask:
             "order": order["order_ref"], "model": a.get("model", "").strip()[:80],
             "operator": a.get("operator", "").strip()[:40], "step": a.get("step", "").strip()[:120],
             "checklist": a.get("checklist", "").strip()[:120],
+            # optional, from the order: "Mounting bracket LH:white" or "c1:white" (comma-separated)
+            "variants": re.sub(r"[^A-Za-z0-9 :,_.-]", "", a.get("variants", ""))[:300],
             "return_url": ret if allowed_origin(ret) else "",
             "source": "ops_hub",
         }
@@ -162,7 +164,8 @@ def create_app(station: Station) -> Flask:
     def start():
         b = request.get_json(force=True)
         try:
-            st.start(b.get("board_id") or None, b.get("order_ref", ""), b.get("operator", ""), b.get("launch"))
+            st.start(b.get("board_id") or None, b.get("order_ref", ""), b.get("operator", ""), b.get("launch"),
+                     b.get("variants"))
         except Exception as e:
             return err(str(e))
         return jsonify(st.status())
@@ -250,8 +253,11 @@ def create_app(station: Station) -> Flask:
         if not bid:
             return jsonify({"code": code, "board_id": None, "taught": False})
         b = st.lib.get(bid)
+        variants = [{"id": c.id, "label": c.label, "usual": c.material, "options": [c.material] + c.alt_materials}
+                    for c in b.components if c.alt_materials]
         return jsonify({"code": code, "board_id": bid, "name": b.name, "product_line": b.product_line,
-                        "taught": bool(b.components and b.reference_images), "parts": len(b.components)})
+                        "taught": bool(b.components and b.reference_images), "parts": len(b.components),
+                        "variants": variants})
 
     # ---------------- guided learn mode (operator)
     def learn_state():
@@ -290,7 +296,7 @@ def create_app(station: Station) -> Flask:
                 L.capture(st.snapshot())
             elif action == "part":
                 L.name_part(b.get("label", ""), b.get("part_number", ""), int(b.get("qty") or 1),
-                            b.get("material", "auto"))
+                            b.get("material", "auto"), b.get("alt_materials") or [])
             elif action == "retry":
                 L.retry()
             elif action == "undo":
