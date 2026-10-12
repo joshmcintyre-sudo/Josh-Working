@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poka-Yoke Order Log</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% with title="Order log" %}{% include "_header.html" %}{% endwith %}
+<main class="logwrap">
+  <div class="row">
+    <label>Order / model / operator <input id="q" placeholder="Scan or type W234566" autofocus autocomplete="off"></label>
+    <label>Result
+      <select id="result">
+        <option value="">All</option><option>PASS</option><option>FAIL</option>
+        <option>QC_CONFIRMED</option><option>NO_RESULT</option>
+      </select>
+    </label>
+    <button id="refresh">Search</button>
+    <a href="/results/inspections.csv" download>Download CSV</a>
+    <span class="hint" id="count"></span>
+  </div>
+  <div style="overflow-x:auto">
+  <table>
+    <thead><tr><th>Time</th><th>Order</th><th>Type</th><th>Model</th><th>Operator</th><th>Camera</th><th>Final</th>
+      <th>Secondary QC</th><th>Issues</th><th>Image</th><th>Export</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+async function load() {
+  const p = new URLSearchParams({q: $("q").value.trim(), result: $("result").value});
+  const rows = await (await fetch("/api/log?" + p)).json();
+  $("count").textContent = `${rows.length} record(s)`;
+  $("rows").innerHTML = rows.map(r => `<tr>
+    <td>${esc((r.finished || "").replace("T", " "))}</td><td><b>${esc(r.order_ref)}</b></td>
+    <td>${esc((r.order_type || "").replace("_", " ").toLowerCase())}</td><td>${esc(r.board_id)}</td><td>${esc(r.operator)}</td>
+    <td class="res ${esc(r.vision_result)}">${esc(r.vision_result)}</td>
+    <td class="res ${esc(r.final_result)}">${esc((r.final_result || "").replace("_", " "))}</td>
+    <td>${r.qc_by ? esc(r.qc_by) + " " + esc((r.qc_at || "").slice(11)) + (r.qc_note ? "<br><span class=hint>" + esc(r.qc_note) + "</span>" : "") : ""}</td>
+    <td class="hint">${esc(r.problems)}</td>
+    <td>${r.image_url ? `<a href="${esc(r.image_url)}" target="_blank"><img src="${esc(r.image_url)}" alt=""></a>` : ""}</td>
+    <td class="hint">${esc(r.export_status)}</td></tr>`).join("");
+}
+$("refresh").onclick = load; $("result").onchange = load;
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") load(); });
+load(); setInterval(load, 15000);
+</script>
+</body>
+</html>

@@ -8,41 +8,33 @@
 </head>
 <body>
 <div id="frame" class="frame"></div>
-<header>
-  <h1>Poka-Yoke Board Check <small>{{ station }}</small></h1>
-  <div class="crumbs" id="crumbs"></div>
-  <a href="/teach">Engineer &rarr;</a>
-</header>
+{% with title="Poka-yoke board check" %}{% include "_header.html" %}{% endwith %}
 
-<!-- 1. IDLE -->
+<!-- 1. IDLE: scan order first -->
 <section class="screen center" data-screen="idle">
-  <div class="banner idle">SYSTEM IDLE</div>
-  <button class="go huge" id="newDespatch">NEW DESPATCH LIST</button>
-  <p class="hint">Camera is off. Press the button or scan a despatch list barcode.</p>
-</section>
-
-<!-- 2. DESPATCH LIST -->
-<section class="screen center" data-screen="despatch">
-  <h2>Step 1 &middot; Despatch list</h2>
-  <input id="despatch" class="scan" placeholder="Scan or type despatch list no." autocomplete="off">
+  <div class="step">Step 1 &middot; Scan order</div>
+  <h2>Scan work or sales order</h2>
+  <input id="order" class="scan" placeholder="W234566 / S98993" autocomplete="off">
   <input id="operator" class="scan small" placeholder="Operator initials" autocomplete="off">
-  <div class="row"><button class="primary huge" id="despatchNext">NEXT</button><button id="toIdle1">Cancel</button></div>
+  <button class="cta huge" id="orderNext">Next</button>
+  <p class="hint">System idle. Camera off. W = work order, S = sales order.</p>
 </section>
 
-<!-- 3. MODEL -->
+<!-- 2. MODEL -->
 <section class="screen center" data-screen="model">
-  <h2>Step 2 &middot; Load model type</h2>
+  <div id="orderCard" class="card"></div>
+  <div class="step">Step 2 &middot; Load model type</div>
   <input id="model" class="scan" placeholder="Scan model barcode" autocomplete="off">
-  <select id="modelList"><option value="">...or pick from list</option></select>
-  <div id="modelCard" class="card"></div>
+  <select id="modelList"><option value="">Or pick from list</option></select>
+  <div id="modelCard" class="hint" style="font-size:20px"></div>
   <div class="row">
-    <button class="go huge" id="verifyBtn" disabled>VERIFY BOARD</button>
-    <button class="warn huge" id="learnBtn" disabled>LEARN MODE</button>
+    <button class="cta huge" id="verifyBtn" disabled>Verify board</button>
+    <button class="huge" id="learnBtn" disabled>Learn mode</button>
   </div>
-  <button id="toIdle2">Cancel</button>
+  <button class="ghost" id="toIdle2">Cancel order</button>
 </section>
 
-<!-- 4. LEARN -->
+<!-- 3. LEARN -->
 <section class="screen learn" data-screen="learn">
   <div class="left">
     <div class="pair">
@@ -51,53 +43,60 @@
     </div>
   </div>
   <aside class="right">
-    <div class="stepbox"><div class="tag" id="learnTag">LEARN</div><div id="learnMsg" class="prompt"></div></div>
+    <div class="stepbox"><div class="tag" id="learnTag">Learn</div><div id="learnMsg" class="prompt"></div></div>
     <div id="nameForm" class="col" hidden>
       <input id="pLabel" class="scan" placeholder="Part name (e.g. M8 x 25 flange bolt)" autocomplete="off">
       <input id="pNum" class="scan small" placeholder="Part number / scan part barcode" autocomplete="off">
       <label>Quantity <input id="pQty" class="scan small" type="number" min="1" value="1"></label>
-      <div class="row"><button class="go huge" id="savePart">SAVE PART</button><button id="retryPart">Wrong area - retry</button></div>
+      <div class="row"><button class="cta huge" id="savePart">Save part</button><button id="retryPart">Wrong area - retry</button></div>
     </div>
     <div class="row" id="captureRow">
-      <button class="primary huge" id="captureBtn">CAPTURE</button>
-      <button class="go" id="partsDone" hidden>ALL PARTS LOADED</button>
+      <button class="cta huge" id="captureBtn">Capture</button>
+      <button class="solid" id="partsDone" hidden>All parts loaded</button>
       <button id="undoPart" hidden>Undo last part</button>
     </div>
-    <button class="go huge" id="saveBoard" hidden>SAVE BOARD</button>
+    <button class="cta huge" id="saveBoard" hidden>Save board</button>
     <ol id="learnParts" class="parts"></ol>
-    <button id="cancelLearn">Cancel learn</button>
+    <button class="ghost" id="cancelLearn">Cancel learn</button>
   </aside>
 </section>
 
-<!-- 5. VERIFY -->
+<!-- 4. VERIFY -->
 <section class="screen op" data-screen="verify">
   <div class="left"><div class="video"><img id="video" alt=""></div></div>
   <aside class="right">
-    <div id="banner" class="banner idle">LOOKING...</div>
-    <p class="hint">Verifying the finished board - confirms automatically when everything is present.</p>
-    <ul id="items"></ul>
-    <div class="row"><button class="primary huge" id="confirmBtn">CONFIRM &amp; SAVE</button><button id="cancelVerify">Cancel</button></div>
+    <div id="banner" class="banner idle">Looking</div>
+    <p class="hint">Verifying finished board. Confirms automatically when every item is present.</p>
+    <ul id="items" class="items"></ul>
+    <div class="row"><button class="cta huge" id="confirmBtn">Confirm &amp; save</button><button class="ghost" id="cancelVerify">Cancel</button></div>
   </aside>
 </section>
 
-<!-- 6. RESULT -->
+<!-- 5. RESULT -->
 <section class="screen center" data-screen="result">
   <div id="resultBanner" class="banner"></div>
   <div id="resultMsg" class="prompt big"></div>
-  <ul id="resultItems"></ul>
-  <div class="row">
-    <button class="primary huge" id="recheck" hidden>RE-CHECK BOARD</button>
-    <button class="go huge" id="nextDespatch">NEXT DESPATCH LIST</button>
+  <ul id="resultItems" class="items"></ul>
+  <div class="row" id="failActions">
+    <button class="cta huge" id="recheck">Re-check board</button>
+    <button class="solid huge" id="qcOpen">Secondary QC confirm</button>
   </div>
-  <button id="toIdle3">Finish (idle)</button>
+  <div id="qcBox" class="qcbox" hidden>
+    <div class="step">Secondary QC &middot; physical check</div>
+    <p>QC has physically checked the board against the order and every item is present.</p>
+    <input id="qcBy" class="scan small" placeholder="QC initials / scan badge" autocomplete="off">
+    <input id="qcNote" class="scan small" placeholder="Note (optional)" autocomplete="off">
+    <div class="row"><button class="cta" id="qcConfirm">Mark physically confirmed</button><button class="ghost" id="qcCancel">Cancel</button></div>
+  </div>
+  <div class="row"><button class="huge" id="nextOrder">Next order</button></div>
   <div id="file" class="file"></div>
 </section>
 
-<div id="error" class="error toast"></div>
+<div id="error" class="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
-const ctx = {despatch: "", operator: localStorage.getItem("py_op") || "", board: null};
+const ctx = {order: null, operator: localStorage.getItem("py_op") || "", board: null};
 let poll = null, liveTimer = null;
 
 async function api(path, body, method) {
@@ -107,51 +106,63 @@ async function api(path, body, method) {
   if (!r.ok) throw new Error(j.error || r.statusText); return j;
 }
 function fail(e) { $("error").textContent = e.message || e; $("error").style.display = "block"; setTimeout(() => $("error").style.display = "none", 6000); }
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 
 function show(name) {
   document.querySelectorAll(".screen").forEach(s => s.hidden = s.dataset.screen !== name);
   $("frame").className = "frame";
-  $("crumbs").textContent = [ctx.despatch && "Despatch " + ctx.despatch, ctx.board && ctx.board.board_id].filter(Boolean).join("  ›  ");
+  $("crumbs").innerHTML = [ctx.order && `${esc(ctx.order.order_label)} <b>${esc(ctx.order.order_ref)}</b>`,
+    ctx.board && ctx.board.board_id && esc(ctx.board.board_id), ctx.operator && "Op " + esc(ctx.operator)].filter(Boolean).join("  /  ");
   clearInterval(poll); poll = null; clearInterval(liveTimer); liveTimer = null;
-  const focus = {despatch: "despatch", model: "model"}[name];
+  const focus = {idle: "order", model: "model"}[name];
   if (focus) { $(focus).value = ""; $(focus).focus(); }
 }
 const onEnter = (id, fn) => $(id).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fn(); } });
 
-/* ---------- idle / despatch ---------- */
-async function goIdle() { try { await api("/api/cancel", {}); } catch (e) {} ctx.despatch = ""; ctx.board = null; show("idle"); }
-$("newDespatch").onclick = () => show("despatch");
-$("toIdle1").onclick = $("toIdle2").onclick = $("toIdle3").onclick = goIdle;
-function despatchNext() {
-  const d = $("despatch").value.trim(); if (!d) return fail("Scan or enter the despatch list number");
-  ctx.despatch = d; ctx.operator = $("operator").value.trim(); localStorage.setItem("py_op", ctx.operator);
+/* ---------- 1. order scan ---------- */
+async function goIdle() { try { await api("/api/cancel", {}); } catch (e) {} ctx.order = null; ctx.board = null; show("idle"); }
+async function orderNext() {
+  const code = $("order").value.trim();
+  if (!code) return fail("Scan the work or sales order barcode");
+  ctx.operator = $("operator").value.trim();
+  if (!ctx.operator) { $("operator").focus(); return fail("Enter operator initials"); }
+  localStorage.setItem("py_op", ctx.operator);
+  try { ctx.order = await api("/api/order?code=" + encodeURIComponent(code)); }
+  catch (e) { $("order").select(); return fail(e); }
   showModel();
 }
-$("despatchNext").onclick = despatchNext;
-onEnter("despatch", () => $("operator").value ? despatchNext() : $("operator").focus());
-onEnter("operator", despatchNext);
+$("orderNext").onclick = orderNext;
+onEnter("order", () => $("operator").value ? orderNext() : $("operator").focus());
+onEnter("operator", orderNext);
+$("toIdle2").onclick = goIdle;
 
-/* ---------- model ---------- */
+/* ---------- 2. model ---------- */
 async function showModel() {
-  show("model"); ctx.board = null; $("modelCard").innerHTML = ""; $("verifyBtn").disabled = $("learnBtn").disabled = true;
+  ctx.board = null; show("model");
+  const o = ctx.order, prev = o.history || [];
+  $("orderCard").innerHTML = `<div class="step">${esc(o.order_label)}</div><div class="big">${esc(o.order_ref)}</div>` +
+    (prev.length ? `<div class="warnText">Already checked ${prev.length}x - last: ${esc(prev[0].final_result)} ${esc(prev[0].finished.replace("T", " "))} (${esc(prev[0].board_id)})</div>`
+                 : `<div class="meta">No previous checks for this order</div>`);
+  $("modelCard").innerHTML = ""; $("verifyBtn").disabled = $("learnBtn").disabled = true;
   const list = await api("/api/boards");
-  $("modelList").innerHTML = '<option value="">...or pick from list</option>' + list.map(b =>
-    `<option value="${b.board_id}">${b.product_line ? b.product_line + " / " : ""}${b.name} [${b.board_id}]</option>`).join("");
+  $("modelList").innerHTML = '<option value="">Or pick from list</option>' + list.map(b =>
+    `<option value="${esc(b.board_id)}">${esc(b.product_line ? b.product_line + " / " : "")}${esc(b.name)} [${esc(b.board_id)}]</option>`).join("");
 }
 async function lookup(code) {
   if (!code) return;
   const r = await api("/api/lookup?code=" + encodeURIComponent(code));
   ctx.board = r.board_id ? r : {board_id: null, code};
   $("modelCard").innerHTML = r.board_id
-    ? `<b>${r.name}</b> &nbsp; [${r.board_id}] ${r.product_line || ""}<br>${r.taught ? `${r.parts} parts taught - ready to verify` : "<span class=warnText>Not taught yet - use LEARN MODE</span>"}`
-    : `<span class=warnText>Model "${code}" is new - use LEARN MODE to teach it</span>`;
+    ? `${esc(r.name)} [${esc(r.board_id)}] ${esc(r.product_line || "")}<br>${r.taught ? `${r.parts} parts taught. Ready to verify.` : "<span class=warnText>Not taught yet. Use learn mode.</span>"}`
+    : `<span class=warnText>Model "${esc(code)}" is new. Use learn mode to teach it.</span>`;
   $("verifyBtn").disabled = !r.taught; $("learnBtn").disabled = false;
+  show("model"); $("model").value = code;
   (r.taught ? $("verifyBtn") : $("learnBtn")).focus();
 }
 onEnter("model", () => lookup($("model").value.trim()).catch(fail));
 $("modelList").onchange = () => lookup($("modelList").value).catch(fail);
 
-/* ---------- learn ---------- */
+/* ---------- 3. learn ---------- */
 $("learnBtn").onclick = async () => {
   const b = ctx.board || {};
   if (b.taught && !confirm(`Re-learn ${b.board_id}? This replaces its current teaching once saved.`)) return;
@@ -160,21 +171,19 @@ $("learnBtn").onclick = async () => {
   try { renderLearn(await api("/api/learn/start", {code: b.board_id || b.code, name, product_line: line})); show("learn"); startLive(); }
   catch (e) { fail(e); }
 };
-function startLive() {
-  liveTimer = setInterval(() => { $("learnLive").src = "/api/frame.jpg?" + Date.now(); }, 700);
-}
+function startLive() { liveTimer = setInterval(() => { $("learnLive").src = "/api/frame.jpg?" + Date.now(); }, 700); }
 function renderLearn(s) {
   $("learnMsg").textContent = s.message;
-  const tags = {empty: "1 · EMPTY BOARD", part: `2 · PART ${s.parts.length + 1}`, name: "2 · NAME PART", undo: "2 · REMOVE PART",
-    repeat: `3 · REFERENCE ${s.ref_count + 1} / ${s.repeats}`, done: "4 · SAVE"};
+  const tags = {empty: "1 / Empty board", part: `2 / Part ${s.parts.length + 1}`, name: "2 / Name part", undo: "2 / Remove part",
+    repeat: `3 / Reference ${s.ref_count + 1} of ${s.repeats}`, done: "4 / Save"};
   $("learnTag").textContent = tags[s.step] || s.step;
   $("nameForm").hidden = s.step !== "name";
   $("captureRow").hidden = !["empty", "part", "repeat", "undo"].includes(s.step);
   $("partsDone").hidden = $("undoPart").hidden = s.step !== "part" || !s.parts.length;
   $("saveBoard").hidden = s.step !== "done";
-  $("learnParts").innerHTML = s.parts.map(p => `<li><b>${p.qty} x</b> ${p.label} <span class=hint>${p.part_number}</span></li>`).join("");
+  $("learnParts").innerHTML = s.parts.map(p => `<li>${p.qty} x ${esc(p.label)} <span class=hint>${esc(p.part_number)}</span></li>`).join("");
   $("learnImg").src = s.step === "empty" ? "" : "/api/learn/image.jpg?" + Date.now();
-  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; setTimeout(() => $("pLabel").focus(), 50); }
+  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; $("pLabel").focus(); }
   else if (s.step === "done") $("saveBoard").focus(); else $("captureBtn").focus();
 }
 const L = (action, body) => api("/api/learn/" + action, body || {}).then(renderLearn).catch(fail);
@@ -186,25 +195,26 @@ const savePart = () => { if (!$("pLabel").value.trim()) return fail("Enter a par
 $("savePart").onclick = savePart;
 onEnter("pLabel", () => $("pNum").focus()); onEnter("pNum", () => $("pQty").focus()); onEnter("pQty", savePart);
 $("saveBoard").onclick = async () => {
-  try { const r = await api("/api/learn/save", {}); ctx.board = await api("/api/lookup?code=" + r.board_id);
-    alert("Board saved. Load a finished board, then VERIFY."); startVerify(); } catch (e) { fail(e); }
+  try { const r = await api("/api/learn/save", {}); ctx.board = await api("/api/lookup?code=" + encodeURIComponent(r.board_id));
+    alert("Board saved. Load the finished board, then verify."); startVerify(); } catch (e) { fail(e); }
 };
 $("cancelLearn").onclick = () => confirm("Cancel learning? Nothing will be saved.") && api("/api/cancel", {}).then(showModel);
 
-/* ---------- verify ---------- */
+/* ---------- 4. verify ---------- */
 $("verifyBtn").onclick = () => startVerify();
 async function startVerify() {
-  try { await api("/api/start", {board_id: ctx.board.board_id, despatch_ref: ctx.despatch, operator: ctx.operator}); }
+  try { await api("/api/start", {board_id: ctx.board.board_id, order_ref: ctx.order.order_ref, operator: ctx.operator}); }
   catch (e) { return fail(e); }
-  show("verify"); $("video").src = "/video.mjpg?" + Date.now(); $("banner").className = "banner idle"; $("banner").textContent = "LOOKING..."; $("items").innerHTML = "";
+  show("verify"); $("video").src = "/video.mjpg?" + Date.now();
+  $("banner").className = "banner idle"; $("banner").textContent = "Looking"; $("items").innerHTML = "";
   poll = setInterval(tick, 500);
 }
-function items(r) {
+function items(r, onlyBad) {
   if (!r) return "";
-  if (!r.board_ok) return `<li class="MISSING">${r.message}</li>`;
+  if (!r.board_ok) return `<li class="MISSING">${esc(r.message)}</li>`;
   const order = {MISSING: 0, SHORT: 1, EXTRA: 2, OK: 3};
-  return [...r.components].sort((a, c) => order[a.status] - order[c.status])
-    .map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${c.status === "OK" ? c.label : c.message}</li>`).join("");
+  return [...r.components].filter(c => !onlyBad || c.status !== "OK").sort((a, c) => order[a.status] - order[c.status])
+    .map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${esc(c.status === "OK" ? c.label : c.message)}</li>`).join("");
 }
 async function tick() {
   try {
@@ -212,7 +222,7 @@ async function tick() {
     if (s.mode !== "inspect") return showResult(s);         // auto-confirmed on stable PASS
     const r = s.result; if (!r) return;
     $("banner").className = "banner " + (r.passed ? "pass" : "fail");
-    $("banner").textContent = r.passed ? "PASS" : (r.board_ok ? "CHECK" : "WRONG BOARD");
+    $("banner").textContent = r.passed ? "Pass" : (r.board_ok ? "Check" : "Wrong board");
     $("frame").className = "frame " + (r.passed ? "pass" : "fail");
     $("items").innerHTML = items(r);
   } catch (e) { fail(e); }
@@ -220,29 +230,34 @@ async function tick() {
 $("confirmBtn").onclick = async () => { await api("/api/stop", {}); showResult(await api("/api/status")); };
 $("cancelVerify").onclick = () => api("/api/cancel", {}).then(showModel);
 
-/* ---------- result ---------- */
+/* ---------- 5. result + secondary QC ---------- */
 function showResult(s) {
   show("result");
-  const pass = s.last_result === "PASS";
-  $("frame").className = "frame " + (pass ? "pass" : "fail");
-  $("resultBanner").className = "banner " + (pass ? "pass" : "fail");
-  $("resultBanner").textContent = pass ? "BOARD CONFIRMED" : (s.last_result === "NO_RESULT" ? "NO RESULT" : "ITEMS MISSING");
+  const res = s.last_result, pass = res === "PASS", qc = res === "QC_CONFIRMED";
+  const cls = pass ? "pass" : qc ? "qc" : "fail";
+  $("frame").className = "frame " + cls;
+  $("resultBanner").className = "banner " + cls;
+  $("resultBanner").textContent = pass ? "Board confirmed" : qc ? "QC confirmed" : res === "NO_RESULT" ? "Unable to confirm" : "Items missing";
   $("resultMsg").textContent = s.prompt || "";
-  $("resultItems").innerHTML = pass ? "" : items(s.result && {...s.result, components: s.result.components.filter(c => c.status !== "OK")});
-  $("recheck").hidden = pass;
-  $("file").innerHTML = s.last_file ? `Saved: <code>${s.last_file}</code>` : "";
-  (pass ? $("nextDespatch") : $("recheck")).focus();
+  $("resultItems").innerHTML = pass ? "" : items(s.result, true);
+  if (qc) $("resultItems").innerHTML += `<li class="OK"><b>QC</b> Physically confirmed by ${esc(s.qc.by)} at ${esc(s.qc.at.slice(11))}${s.qc.note ? " - " + esc(s.qc.note) : ""}</li>`;
+  $("failActions").hidden = pass || qc; $("qcBox").hidden = true;
+  $("file").innerHTML = s.last_file ? `Saved: <code>${esc(s.last_file)}</code>` : "";
+  (pass || qc ? $("nextOrder") : $("recheck")).focus();
 }
 $("recheck").onclick = () => startVerify();
-$("nextDespatch").onclick = () => { ctx.board = null; ctx.despatch = ""; show("despatch"); };
+$("qcOpen").onclick = () => { $("failActions").hidden = true; $("qcBox").hidden = false; $("qcBy").value = ""; $("qcNote").value = ""; $("qcBy").focus(); };
+$("qcCancel").onclick = () => { $("qcBox").hidden = true; $("failActions").hidden = false; };
+async function qcConfirm() {
+  try { await api("/api/qc", {qc_by: $("qcBy").value, note: $("qcNote").value}); $("error").style.display = "none"; showResult(await api("/api/status")); }
+  catch (e) { fail(e); $("qcBy").focus(); }
+}
+$("qcConfirm").onclick = qcConfirm;
+onEnter("qcBy", () => $("qcNote").focus()); onEnter("qcNote", qcConfirm);
+$("nextOrder").onclick = () => { ctx.board = null; ctx.order = null; show("idle"); };
 
 $("operator").value = ctx.operator;
 show("idle");
-document.addEventListener("keydown", e => {   // scanner / foot pedal on idle screen
-  if ($("newDespatch").closest(".screen").hidden) return;
-  if (e.key === "Enter" || e.code === "Space") { e.preventDefault(); show("despatch"); }
-  else if (e.key.length === 1) { e.preventDefault(); show("despatch"); $("despatch").value = e.key; }  // barcode scan starts despatch
-});
 </script>
 </body>
 </html>

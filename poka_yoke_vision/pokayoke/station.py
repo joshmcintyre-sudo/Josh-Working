@@ -15,7 +15,10 @@ import cv2
 import numpy as np
 
 from .board import BoardLibrary
+from .export import Exporter
 from .inspector import InspectionResult, Inspector, annotate, component_status
+from .orderlog import OrderLog
+from .orders import parse_order
 
 
 class Camera:
@@ -99,6 +102,9 @@ class Station:
         self._pass_since: float | None = None
         self._qr = cv2.QRCodeDetector()
         self.learn = None                     # LearnSession while in guided learn mode
+        self.log = OrderLog(self.results_dir / "order_log.db")
+        self.exporter = Exporter(settings, self.results_dir, self.log.set_export_status) \
+            if settings.get("export") else None
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
@@ -135,14 +141,17 @@ class Station:
         return frame
 
     # ------------------------------------------------ inspection session
-    def start(self, board_id: str | None, despatch_ref: str = "", operator: str = "") -> None:
+    def start(self, board_id: str | None, order_ref: str = "", operator: str = "") -> None:
         if self.mode == "inspect":
             return
         if board_id:
             self.select_board(board_id)
         if self.inspector is None and not self.s.get("qr_autoselect"):
             raise RuntimeError("Select a board first")
-        self.job = {"despatch_ref": despatch_ref, "operator": operator, "started": datetime.now().isoformat(timespec="seconds")}
+        order = parse_order(order_ref, self.s.get("order_types"), self.s.get("order_pattern")) if order_ref else \
+            {"order_ref": "", "order_type": ""}
+        self.job = {"order_ref": order["order_ref"], "order_type": order["order_type"], "operator": operator,
+                    "started": datetime.now().isoformat(timespec="seconds")}
         self.history.clear()
         self.latest, self.last_file, self.error, self._pass_since = None, None, None, None
         self.last_record = None
@@ -251,41 +260,86 @@ class Station:
     def _write_result(self) -> dict:
         now = datetime.now()
         res = self.latest
+        vision = "NO_RESULT" if res is None else ("PASS" if res.passed else "FAIL")
+        stem = "_".join(x for x in (self.job.get("order_ref"), self.board_id or "unknown", f"{now:%Y%m%d-%H%M%S}") if x)
+        stem = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in stem)
         record = {
+            "record_id": stem,
             "station": self.s.get("station_name", platform.node()),
+            "order_ref": self.job.get("order_ref", ""),
+            "order_type": self.job.get("order_type", ""),
             "board_id": self.board_id,
-            "despatch_ref": self.job.get("despatch_ref", ""),
             "operator": self.job.get("operator", ""),
             "started": self.job.get("started"),
             "finished": now.isoformat(timespec="seconds"),
-            "result": "NO_RESULT" if res is None else ("PASS" if res.passed else "FAIL"),
-            "operator_prompt": self.s["pass_message"] if res is not None and res.passed else self.s["fail_message"],
+            "vision_result": vision,
+            "result": vision,                      # final result; becomes QC_CONFIRMED after secondary QC
+            "qc": None,
+            "operator_prompt": self.s["pass_message"] if vision == "PASS" else self.s["fail_message"],
             "inspection": None if res is None else res.to_dict(),
         }
         day = self.results_dir / now.strftime("%Y-%m-%d")
         day.mkdir(parents=True, exist_ok=True)
-        stem = f"{self.board_id or 'unknown'}_{now:%H%M%S}" + (f"_{record['despatch_ref']}" if record["despatch_ref"] else "")
-        stem = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in stem)
-        json_path = day / f"{stem}.json"
         if getattr(self, "_last_img", None) is not None:
             cv2.imwrite(str(day / f"{stem}.jpg"), self._last_img)
             record["image"] = f"{stem}.jpg"
+        self.last_file = str(day / f"{stem}.json")
+        self.last_record = record
+        self._save(record)
+        return record
+
+    def qc_confirm(self, qc_by: str, note: str = "") -> dict:
+        """Secondary QC physically checked a board the camera could not confirm."""
+        rec = self.last_record
+        if rec is None:
+            raise RuntimeError("No inspection to confirm")
+        if rec["result"] == "PASS":
+            raise RuntimeError("Board already passed - no QC override needed")
+        qc_by = qc_by.strip()
+        if not qc_by:
+            raise RuntimeError("QC initials required")
+        if self.s.get("qc_must_differ", True) and qc_by.lower() == (rec.get("operator") or "").strip().lower():
+            raise RuntimeError("Secondary QC must be a different person to the operator")
+        rec["qc"] = {"by": qc_by, "note": note.strip(), "at": datetime.now().isoformat(timespec="seconds"),
+                     "statement": "Physically confirmed by secondary QC"}
+        rec["result"] = "QC_CONFIRMED"
+        rec["operator_prompt"] = f"Physically confirmed by secondary QC ({qc_by}) - {self.s['pass_message']}"
+        self._save(rec, suffix="_QC")
+        return rec
+
+    def _save(self, record: dict, suffix: str = "") -> None:
+        """JSON file + CSV audit row + order log + export queue."""
+        json_path = Path(self.last_file)
         json_path.write_text(json.dumps(record, indent=2))
+        image_path = json_path.with_name(record["image"]) if record.get("image") else None
+        res = record["inspection"]
+        probs = "" if not res else "; ".join(c["message"] for c in res["components"] if c["status"] != "OK") or \
+            ("" if res["board_ok"] else res["message"])
+        qc = record["qc"] or {}
 
         csv_path = self.results_dir / "inspections.csv"
         new = not csv_path.exists()
         with csv_path.open("a", newline="") as f:
             w = csv.writer(f)
             if new:
-                w.writerow(["finished", "station", "board_id", "despatch_ref", "operator", "result",
-                            "match_score", "problems", "file"])
-            probs = "" if res is None else "; ".join(c.message for c in res.problems)
-            w.writerow([record["finished"], record["station"], record["board_id"], record["despatch_ref"],
-                        record["operator"], record["result"], None if res is None else res.match_score,
-                        probs, str(json_path)])
-        self.last_file = str(json_path)
-        self.last_record = record
-        return record
+                w.writerow(["finished", "station", "order_ref", "order_type", "board_id", "operator",
+                            "vision_result", "result", "qc_by", "qc_note", "problems", "file"])
+            w.writerow([qc.get("at") or record["finished"], record["station"], record["order_ref"],
+                        record["order_type"], record["board_id"], record["operator"], record["vision_result"],
+                        record["result"], qc.get("by", ""), qc.get("note", ""), probs, str(json_path)])
+
+        export = "not configured"
+        if self.exporter is not None:
+            # QC update goes out as its own file so the original camera record is never overwritten downstream
+            out = json_path
+            if suffix:
+                out = json_path.with_name(json_path.stem + suffix + ".json")
+                out.write_text(json.dumps(record, indent=2))
+            export = self.exporter.enqueue({**record, "record_id": record["record_id"] + suffix}, out,
+                                           None if suffix else image_path)
+        self.log.upsert({**record, "qc_by": qc.get("by"), "qc_note": qc.get("note"), "qc_at": qc.get("at"),
+                         "final_result": record["result"], "problems": probs, "json_path": str(json_path),
+                         "image_path": str(image_path) if image_path else "", "export_status": export})
 
     def status(self) -> dict:
         with self._lock:
@@ -297,5 +351,6 @@ class Station:
                 "last_file": self.last_file,
                 "last_result": self.last_record and self.last_record["result"],
                 "prompt": self.last_record and self.last_record["operator_prompt"],
+                "qc": self.last_record and self.last_record["qc"],
                 "error": self.error,
             }

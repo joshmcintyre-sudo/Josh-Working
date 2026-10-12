@@ -73,13 +73,13 @@ class LearnSession:
         out = img.copy()
         for c in self.components:
             x, y, w, h = c.roi
-            cv2.rectangle(out, (x, y), (x + w, y + h), (60, 180, 60), 3)
+            cv2.rectangle(out, (x, y), (x + w, y + h), (255, 255, 255), 2)
             cv2.putText(out, f"{c.label} x{c.expected_count}", (x + 4, max(18, y - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 180, 60), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         if self.proposal:
             x, y, w, h = self.proposal
-            cv2.rectangle(out, (x, y), (x + w, y + h), (0, 170, 255), 4)
-            cv2.putText(out, "NEW PART", (x + 4, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 170, 255), 2)
+            cv2.rectangle(out, (x, y), (x + w, y + h), (68, 96, 135), 5)
+            cv2.putText(out, "NEW PART", (x + 4, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (68, 96, 135), 2)
         return out
 
     # ---- operator actions
@@ -103,7 +103,7 @@ class LearnSession:
             else:
                 self.pending, self.proposal = f, roi
                 self.step = "name"
-                self.message = "Name this part (orange box), enter part number and quantity, then SAVE PART"
+                self.message = "Name this part (bronze box), enter part number and quantity, then SAVE PART"
         elif self.step == "undo":
             self.prev = self._align(frame)
             self.step = "part"

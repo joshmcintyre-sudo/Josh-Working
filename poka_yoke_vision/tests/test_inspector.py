@@ -76,13 +76,13 @@ def test_station_start_stop_writes_result(lib, tmp_path):
     s = dict(DEFAULTS, boards_dir=str(lib.root), results_dir=str(tmp_path / "results"), fps=10)
     st = Station(s, FileCamera(str(img)))
     client = create_app(st).test_client()
-    assert client.post("/api/start", json={"board_id": "DEMO-HILUX-01", "despatch_ref": "WO-1001", "operator": "JM"}).status_code == 200
+    assert client.post("/api/start", json={"board_id": "DEMO-HILUX-01", "order_ref": "W1001", "operator": "JM"}).status_code == 200
     for _ in range(50):
         if st.latest is not None and len(st.history) >= 3:
             break
         time.sleep(0.05)
     rec = client.post("/api/stop").get_json()
-    assert rec["result"] == "FAIL" and rec["despatch_ref"] == "WO-1001"
+    assert rec["result"] == "FAIL" and rec["order_ref"] == "W1001" and rec["order_type"] == "WORK_ORDER"
     saved = json.loads(open(st.last_file).read())
     bolts = next(c for c in saved["inspection"]["components"] if c["part_number"] == "FAST-M8-25")
     assert (bolts["found"], bolts["status"]) == (5, "SHORT")
@@ -150,7 +150,7 @@ def test_operator_learn_then_verify_workflow(tmp_path):
 
     # verify a short board -> operator confirms -> fail prompt
     cam.frame = demo.kitted(bare, bolts=3)
-    c.post("/api/start", json={"board_id": look["board_id"], "despatch_ref": "DL-5501"})
+    c.post("/api/start", json={"board_id": look["board_id"], "order_ref": "S98993"})
     time.sleep(0.6)
     rec = c.post("/api/stop").get_json()
     assert rec["result"] == "FAIL"
@@ -158,7 +158,7 @@ def test_operator_learn_then_verify_workflow(tmp_path):
 
     # verify a complete board -> auto-confirms on stable PASS -> pass prompt
     cam.frame = demo.kitted(bare)
-    c.post("/api/start", json={"board_id": look["board_id"], "despatch_ref": "DL-5501"})
+    c.post("/api/start", json={"board_id": look["board_id"], "order_ref": "S98993"})
     for _ in range(60):
         if st.mode == "idle" and st.last_record:
             break

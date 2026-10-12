@@ -13,5 +13,13 @@
   "boards_dir": "boards",
   "results_dir": "results",
   "host": "127.0.0.1",
-  "port": 8080
+  "port": 8080,
+  "order_types": {"W": "Work order", "S": "Sales order"},
+  "order_pattern": "^[A-Z]\\d{4,10}$",
+  "qc_must_differ": true,
+  "export": {
+    "retry_seconds": 60,
+    "webhook": {"enabled": false, "url": "https://your-app.example/api/pokayoke/results"},
+    "box": {"enabled": false, "folder_id": "", "subject_type": "enterprise"}
+  }
 }

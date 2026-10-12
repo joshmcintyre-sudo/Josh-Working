@@ -16,6 +16,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 from .board import Component
 from .inspector import Inspector, annotate
 from .learn import LearnSession
+from .orders import parse_order
 from .station import FileCamera, Station
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,13 +36,32 @@ DEFAULTS = {
     "results_dir": "results",
     "host": "127.0.0.1",
     "port": 8080,
+    "order_types": {"W": "Work order", "S": "Sales order"},
+    "order_pattern": "^[A-Z]\\d{4,10}$",
+    "qc_must_differ": True,
+    "export": {
+        "retry_seconds": 60,
+        "webhook": {"enabled": False, "url": "", "token": ""},
+        "box": {"enabled": False, "folder_id": "", "client_id": "", "client_secret": "",
+                "subject_type": "enterprise", "subject_id": "", "developer_token": ""},
+    },
 }
+
+
+def _merge(base: dict, extra: dict) -> dict:
+    out = dict(base)
+    for k, v in extra.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
 
 
 def load_settings(path: Path) -> dict:
     s = dict(DEFAULTS)
     if path.exists():
-        s.update(json.loads(path.read_text()))
+        s = _merge(s, json.loads(path.read_text()))
+    secrets = path.with_name("secrets.json")       # Box / webhook credentials, kept out of git
+    if secrets.exists():
+        s = _merge(s, json.loads(secrets.read_text()))
     for k in ("boards_dir", "results_dir"):
         p = Path(s[k])
         s[k] = str(p if p.is_absolute() else path.parent / p)
@@ -62,7 +82,7 @@ def create_app(station: Station) -> Flask:
 
     @app.get("/teach")
     def teach():
-        return render_template("teach.html")
+        return render_template("teach.html", station=st.s["station_name"])
 
     # ---------------- video
     @app.get("/video.mjpg")
@@ -92,7 +112,7 @@ def create_app(station: Station) -> Flask:
     def start():
         b = request.get_json(force=True)
         try:
-            st.start(b.get("board_id") or None, b.get("despatch_ref", ""), b.get("operator", ""))
+            st.start(b.get("board_id") or None, b.get("order_ref", ""), b.get("operator", ""))
         except Exception as e:
             return err(str(e))
         return jsonify(st.status())
@@ -101,6 +121,44 @@ def create_app(station: Station) -> Flask:
     def stop():
         rec = st.stop()
         return jsonify(rec or {"error": "not running"})
+
+    @app.get("/api/order")
+    def order():
+        try:
+            o = parse_order(request.args.get("code", ""), st.s["order_types"], st.s["order_pattern"])
+        except ValueError as e:
+            return err(str(e))
+        o["history"] = st.log.query(q=o["order_ref"], limit=10)
+        return jsonify(o)
+
+    @app.post("/api/qc")
+    def qc():
+        b = request.get_json(force=True)
+        try:
+            rec = st.qc_confirm(b.get("qc_by", ""), b.get("note", ""))
+        except RuntimeError as e:
+            return err(str(e))
+        return jsonify(rec)
+
+    @app.get("/log")
+    def log_page():
+        return render_template("log.html", station=st.s["station_name"])
+
+    @app.get("/api/log")
+    def log_api():
+        rows = st.log.query(request.args.get("q", ""), request.args.get("result", ""),
+                            int(request.args.get("limit", 200)))
+        for r in rows:
+            p = Path(r["image_path"] or "")
+            r["image_url"] = f"/results/{p.parent.name}/{p.name}" if r["image_path"] else ""
+        return jsonify(rows)
+
+    @app.post("/api/export/flush")
+    def export_flush():
+        if st.exporter is None:
+            return err("Export not configured")
+        st.exporter.flush()
+        return jsonify({"ok": True})
 
     @app.post("/api/cancel")
     def cancel():

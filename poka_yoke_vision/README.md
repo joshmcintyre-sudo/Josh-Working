@@ -1,6 +1,6 @@
 # Poka-Yoke Board Vision Station
 
-Local (offline) vision check for model-specific poka-yoke kitting boards. Overhead USB camera → teach a good board → operator presses **START**, screen shows what is missing / how many more are needed → **STOP & SAVE** writes a result file.
+Local vision check for model-specific poka-yoke kitting boards. Scan the work/sales order → scan the model → camera checks the board → PASS, FAIL or secondary-QC confirmation → logged against the order, with JSON + image queued for your app and Box.
 
 - Runs on a basic office PC (CPU only, 1–5 fps). No cloud, no GPU, no model training.
 - Python + OpenCV + Flask. UI is a browser page on the station monitor.
@@ -24,24 +24,45 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 11 tests incl. full learn→verify workflow;: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 21 tests: vision, learn→verify workflow, orders, QC, log, Box/webhook export: pass/missing/short/moved/lighting/wrong board/API
 ```
 
-## Operator workflow (`/`) - new despatch list
+## Operator workflow (`/`) - scan order first
 
 | # | Screen | Operator does | System does |
 |---|---|---|---|
-| 1 | **SYSTEM IDLE** | Press **NEW DESPATCH LIST** (or just scan the despatch barcode) | Camera off |
-| 2 | **Despatch list** | Scan/type despatch list no. + initials | Stored on the result file |
-| 3 | **Load model type** | Scan model barcode (or pick from list) | Finds the board. Taught → **VERIFY BOARD**. New/untaught → **LEARN MODE** |
-| 4 | **Learn mode** (prompted) | a) Place EMPTY board → CAPTURE<br>b) "Load PART 1" → CAPTURE → orange box appears around the new part → type name, part no., qty → SAVE PART<br>c) repeat for each part → **ALL PARTS LOADED**<br>d) "Reference 2 of 3: lift and re-place parts" → CAPTURE (x `learn_repeats`)<br>e) **SAVE BOARD** | Finds each new part automatically (difference vs previous capture), learns sizes for counted parts |
-| 5 | **Verify** | Load the finished board | Live check; auto-confirms after PASS holds `auto_stop_pass_seconds` (or press CONFIRM) |
-| 6a | **PASS** | – | Green border + **"Now ready to bag and package kit"** |
-| 6b | **FAIL** | Fix items → **RE-CHECK BOARD** | Red border + **"Review despatch list and verify all items are present"** + list of what's missing / how many more |
+| 1 | **Scan order** (idle) | Scan work/sales order barcode (`W234566`, `S98993`) + initials | Validates format, sets type (W = work order, S = sales order). Camera off |
+| 2 | **Load model type** | Scan model barcode (or pick from list) | Shows the order and any earlier checks on it. Taught → **VERIFY BOARD**. New → **LEARN MODE** |
+| 3 | **Learn mode** (prompted) | a) EMPTY board → CAPTURE<br>b) "Load PART 1" → CAPTURE → bronze box appears on the new part → name, part no., qty → SAVE PART<br>c) repeat → **ALL PARTS LOADED**<br>d) "Reference 2 of 3: lift and re-place parts" → CAPTURE<br>e) **SAVE BOARD** | Finds each new part automatically, learns sizes for counted parts |
+| 4 | **Verify** | Load the finished board | Live check; auto-confirms after PASS holds `auto_stop_pass_seconds` (or CONFIRM) |
+| 5a | **PASS** | – | Green border + **"Now ready to bag and package kit"** |
+| 5b | **FAIL / unable to confirm** | Fix items → **RE-CHECK BOARD**, or **SECONDARY QC CONFIRM** | Red border + **"Review despatch list and verify all items are present"** + what's missing / how many more |
+| 5c | **QC CONFIRMED** | Second person physically checks, enters/scans QC initials + note | White border + "Physically confirmed by secondary QC (AB) - Now ready to bag and package kit". Camera result kept as FAIL; final result `QC_CONFIRMED` |
 
-- **Barcode scanning:** any USB keyboard-wedge scanner (e.g. Zebra DS2208, Honeywell Voyager 1250g) works with no setup: fields auto-focus and the scanner's Enter advances the step. The model barcode you scan in learn mode is remembered against the board, so next time scanning it loads the board directly. Part-number field also accepts a part barcode scan.
-- Learn tips: hands out of view on each CAPTURE; put all of one fastener type down in one go and enter the qty (qty > 1 = counted); wrong box? **Wrong area - retry**; mistake after saving? **Undo last part** and take it off the board.
-- Prompts are editable in `settings.json` (`pass_message`, `fail_message`).
+- **Secondary QC rule:** QC initials must differ from the operator (`qc_must_differ`). Only offered when the camera did not pass the board.
+- **Barcode scanning:** any USB keyboard-wedge scanner (e.g. Zebra DS2208, Honeywell Voyager 1250g). Fields auto-focus; the scanner's Enter advances. Symbology prefixes (e.g. `]C1W234566`) are stripped. Order format is set by `order_types` / `order_pattern`.
+- Model barcode scanned in learn mode is remembered against the board.
+- Learn tips: hands out of view on each CAPTURE; one fastener type at a time with its qty (qty > 1 = counted); **Wrong area - retry**; **Undo last part**.
+
+## Order log (`/log`)
+
+Every check is one row in `results/order_log.db` (SQLite): time, order, type, model, operator, camera result, final result, QC by/time/note, issues, image thumbnail, export status. Search by scanning an order barcode; filter by result; **Download CSV** (`results/inspections.csv` is the append-only audit trail - a QC confirmation adds a second row).
+
+## Sending results to another app and Box
+
+Each saved record is queued in `results/outbox/pending/` and sent in the background; network drops retry every `retry_seconds`, sent jobs move to `outbox/sent/`. Status shows in the order log. Both targets are off until configured.
+
+**Your app (webhook)** - `POST` multipart: `record` (JSON) + `image` (JPG), optional `Authorization: Bearer <token>`.
+```json
+"export": { "webhook": { "enabled": true, "url": "https://your-app/api/pokayoke/results" } }
+```
+
+**Box (upload to folder API)** - `POST https://upload.box.com/api/2.0/files/content` with the record JSON + annotated JPG into one folder. Files are named `<order>_<model>_<yyyymmdd-hhmmss>.json/.jpg`; a QC confirmation uploads an extra `..._QC.json`.
+1. Box Developer Console → Create Platform App → Custom App → **Server Authentication (Client Credentials Grant)**. Scope: *Write all files and folders*. Submit for admin authorisation (Box Admin Console → Apps → Platform Apps Manager).
+2. Create/choose the results folder, e.g. `Operations > Poka-Yoke Results`; folder ID is the number in its URL. Invite the app's service account (`AutomationUser_...@boxdevedition.com`) as Editor.
+3. `settings.json` → `"box": {"enabled": true, "folder_id": "<id>"}`. Copy `secrets.example.json` to `secrets.json` (git-ignored) and fill `client_id`, `client_secret`, `subject_id` (enterprise ID). For a quick test a 60-min `developer_token` works instead.
+
+Ref: Box docs - [Upload file](https://developer.box.com/reference/post-files-content/), [Client Credentials Grant](https://developer.box.com/guides/authentication/client-credentials/).
 
 ## Teaching / fine-tuning a board (engineer, `/teach`)
 
@@ -70,22 +91,22 @@ Tips: one box per pocket/shadow outline; keep boxes tight; one `count` box per f
 
 ## Result files
 
-`results/YYYY-MM-DD/<board>_<HHMMSS>_<despatch>.json` + annotated `.jpg`, plus one row per run in `results/inspections.csv` (opens in Excel / Power BI).
+`results/YYYY-MM-DD/<order>_<board>_<yyyymmdd-hhmmss>.json` + annotated `.jpg`, plus one row per run in `results/inspections.csv` (opens in Excel / Power BI).
 
 ```json
 {
-  "station": "PY-STATION-1", "board_id": "DEMO-HILUX-01", "despatch_ref": "DL-5501", "operator": "JM",
-  "started": "2026-10-12T04:59:05", "finished": "2026-10-12T04:59:06", "result": "FAIL", "operator_prompt": "Review despatch list and verify all items are present",
+  "station": "PY-STATION-1", "board_id": "DEMO-HILUX-01", "record_id": "W234566_DEMO-HILUX-01_20261012-045906", "order_ref": "W234566", "order_type": "WORK_ORDER", "operator": "JM",
+  "started": "2026-10-12T04:59:05", "finished": "2026-10-12T04:59:06", "vision_result": "FAIL", "result": "FAIL", "qc": null, "operator_prompt": "Review despatch list and verify all items are present",
   "inspection": { "match_score": 0.982, "passed": false, "message": "FAIL - 2 item(s) to fix",
     "components": [
       {"label": "Door seal 450mm", "part_number": "SEAL-EPDM-450", "expected": 1, "found": 0, "status": "MISSING",
        "message": "MISSING 1 x Door seal 450mm (SEAL-EPDM-450)"},
       {"label": "M8 x 25 flange bolt", "part_number": "FAST-M8-25", "expected": 6, "found": 4, "status": "SHORT",
        "message": "Need 2 more M8 x 25 flange bolt (FAST-M8-25)  (4/6)"} ] },
-  "image": "DEMO-HILUX-01_045906_DL-5501.jpg"
+  "image": "W234566_DEMO-HILUX-01_20261012-045906.jpg"
 }
 ```
-Point `results_dir` in `settings.json` at a network share / OneDrive / Box Drive folder to collect results centrally (e.g. pick up with Power Automate or a NetSuite CSV import keyed on `despatch_ref`).
+Point `results_dir` in `settings.json` at a network share / OneDrive / Box Drive folder to collect results centrally (e.g. pick up with Power Automate or a NetSuite CSV import keyed on `order_ref`).
 
 ## settings.json
 
@@ -100,6 +121,9 @@ Point `results_dir` in `settings.json` at a network share / OneDrive / Box Drive
 | `pass_message` / `fail_message` | see file | operator prompts on the result screen |
 | `qr_autoselect` | false | `true` = read a QR code on the board (text = Board ID); auto-selects board and flags mismatch |
 | `results_dir` | results | can be a network share; in JSON escape backslashes: `"\\\\server\\share\\py-results"` |
+| `order_types` / `order_pattern` | W, S / `^[A-Z]\\d{4,10}$` | order prefixes and format |
+| `qc_must_differ` | true | QC person must differ from operator |
+| `export` | off | webhook + Box, see above |
 | `host` | 127.0.0.1 | `0.0.0.0` to view from a supervisor's PC (LAN only) |
 
 ## Hardware (tested approach, typical AU/NA supply)
@@ -126,3 +150,9 @@ Code: `pokayoke/inspector.py` (vision), `station.py` (camera, start/stop, result
 - Overlapping loose fasteners piled up undercount – keep a pocket per small batch.
 - If you later need part-type recognition (e.g. M8 vs M10 bolt mixed in a pocket), add a YOLO model (Ultralytics) per `count` box; the result file and screens stay the same.
 - Commercial comparables if you outgrow this: Keyence IV3 / Cognex In-Sight 2800 smart-camera AI sensors do the same presence/count check (quoted per station).
+
+## Branding
+
+Screens follow Utemaster brand guidelines: Rich Black / White, Bronze for the one primary action and step labels, Aptos Narrow uppercase headings (Beachwood if installed), Aptos body (Neue Montreal if installed), 2 px corners, Black 60 precision lines.
+- **Logo:** put the official `Utemaster_Wordmark_Primary_White.svg` in `static/brand/` (Box path in `static/brand/README.txt`). Until then a `[UTEMASTER LOGO]` placeholder shows. Do not redraw it.
+- **Exception:** PASS green / FAIL red are kept only on the result banner and screen border as functional safety signals (standard andon practice). QC-confirmed uses brand White.

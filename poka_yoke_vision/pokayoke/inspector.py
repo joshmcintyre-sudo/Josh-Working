@@ -265,7 +265,7 @@ class Inspector:
 
 
 # ---------------------------------------------------------------- drawing
-GREEN, RED, AMBER, WHITE = (60, 180, 60), (40, 40, 220), (0, 170, 255), (255, 255, 255)
+GREEN, RED, AMBER, WHITE = (70, 123, 30), (30, 38, 179), (68, 96, 135), (255, 255, 255)  # status pass/fail, Utemaster bronze
 
 
 def annotate(img: np.ndarray, res: InspectionResult) -> np.ndarray:

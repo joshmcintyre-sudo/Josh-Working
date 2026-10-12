@@ -7,10 +7,7 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>Teach / Build Boards</h1>
-  <a href="/">&larr; Operator screen</a>
-</header>
+{% with title="Teach / build boards" %}{% include "_header.html" %}{% endwith %}
 <main class="teach">
   <section>
     <div class="row" style="margin-bottom:10px">
@@ -88,13 +85,13 @@ function draw() {
   ctx.drawImage(img, 0, 0);
   (board?.components || []).forEach((c, i) => {
     const [x, y, w, h] = c.roi;
-    ctx.lineWidth = 3; ctx.strokeStyle = i === sel ? "#2f80ed" : "#ffd400"; ctx.strokeRect(x, y, w, h);
+    ctx.lineWidth = 3; ctx.strokeStyle = i === sel ? "#876044" : "#FFFFFF"; ctx.strokeRect(x, y, w, h);
     const t = `${c.label} x${c.expected_count}`, ty = y - 6 < 14 ? y + 18 : y - 6;
     ctx.font = "bold 16px sans-serif"; ctx.fillStyle = "rgba(0,0,0,.75)";
     ctx.fillRect(x, ty - 16, ctx.measureText(t).width + 8, 21);
     ctx.fillStyle = ctx.strokeStyle; ctx.fillText(t, x + 4, ty);
   });
-  if (drag?.w) { ctx.strokeStyle = "#2f80ed"; ctx.setLineDash([6, 4]); ctx.strokeRect(drag.x, drag.y, drag.w, drag.h); ctx.setLineDash([]); }
+  if (drag?.w) { ctx.strokeStyle = "#876044"; ctx.setLineDash([6, 4]); ctx.strokeRect(drag.x, drag.y, drag.w, drag.h); ctx.setLineDash([]); }
 }
 
 function rows() {
