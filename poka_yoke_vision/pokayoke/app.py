@@ -289,7 +289,8 @@ def create_app(station: Station) -> Flask:
             if action == "capture":
                 L.capture(st.snapshot())
             elif action == "part":
-                L.name_part(b.get("label", ""), b.get("part_number", ""), int(b.get("qty") or 1))
+                L.name_part(b.get("label", ""), b.get("part_number", ""), int(b.get("qty") or 1),
+                            b.get("material", "auto"))
             elif action == "retry":
                 L.retry()
             elif action == "undo":

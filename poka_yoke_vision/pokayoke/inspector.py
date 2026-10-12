@@ -10,9 +10,10 @@ from dataclasses import asdict, dataclass
 import cv2
 import numpy as np
 
-from . import lighting
+from . import colour, lighting
 from .board import Board, Component
 
+SOMETHING = 14.0  # low difference level: "is ANY object in this pocket?" (catches wrong-colour parts)
 PATCH = 24  # presence patches are shrunk to <= 24 px: tolerant to small part shifts / wrinkles
 
 
@@ -98,7 +99,7 @@ class ComponentResult:
     part_number: str
     expected: int
     found: int
-    status: str        # OK | MISSING | SHORT | EXTRA | GLARE (part area blown out, can't be judged)
+    status: str        # OK | MISSING | SHORT | EXTRA | WRONG_PART (wrong colour/material) | GLARE (can't be seen)
     score: float
     message: str
     roi: list[int]
@@ -137,6 +138,12 @@ def component_status(c: Component, found: int, score: float) -> ComponentResult:
     return ComponentResult(c.id, c.label, c.part_number, exp, found, st, round(score, 3), msg, c.roi)
 
 
+def wrong_part(c: Component, seen: list[float] | None, score: float) -> ComponentResult:
+    want = c.material if c.material in colour.RULED and c.material != "colour" else colour.describe(c.colour_lab)
+    msg = f"WRONG PART? {c.label} should be {want}, this looks {colour.describe(seen)}"
+    return ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "WRONG_PART", round(score, 3), msg, c.roi)
+
+
 # ---------------------------------------------------------------- inspector
 class Inspector:
     def __init__(self, board: Board):
@@ -158,6 +165,8 @@ class Inspector:
         self.refs = [self.base] + [lighting.correct(self._to_base(r), self.base, self.bg_mask) for r in self.refs[1:]]
         if self.empty is not None:
             self.empty = lighting.correct(self._to_base(self.empty), self.base, self.bg_mask)
+            if any(c.ref_fg_area <= 0 for c in board.components):
+                self.calibrate()                   # board taught before colour learning: learn it now (in memory)
 
     def _board_similarity(self, live: np.ndarray, H, frame: np.ndarray) -> float:
         """NCC of the bare-board background vs reference: ~1 same board, ~0 different board."""
@@ -186,30 +195,76 @@ class Inspector:
                 return warped
         return img
 
-    # ---- calibration: learn per-part size and difference level from the taught images
+    # ---- calibration: learn each part's difference level, size and colour from the taught images
     def calibrate(self) -> list[str]:
         notes = []
         for c in self.board.components:
-            if c.method != "count":
-                continue
             if self.empty is None:
-                notes.append(f"{c.label}: 'count' needs an empty-board image - capture one")
+                if c.method == "count" or c.material != "auto":
+                    notes.append(f"{c.label}: needs an empty-board image for counting / colour checks - capture one")
                 continue
             e = _crop(self.empty, c.roi)
-            levels, areas = [], []
+            levels = []
+            for r in self.refs:
+                d = np.abs(_lab(cv2.GaussianBlur(_crop(r, c.roi), (5, 5), 0)) - _lab(cv2.GaussianBlur(e, (5, 5), 0)))
+                diff = np.maximum(d[..., 0] * 0.5, np.maximum(d[..., 1], d[..., 2]) * 1.5)
+                part = diff[diff > 8]                 # pixels that clearly changed when the part went on
+                # half way between "no change" and the part's typical change: keeps the whole part (a white
+                # part on a light board differs only a little) while ignoring noise and light drift
+                levels.append(float(np.clip(0.5 * np.median(part), 12, 40)) if part.size else 25.0)
+            c.fg_level = float(np.median(levels))
+            fg_areas, mat_areas, pixels = [], [], []
             for r in self.refs:
                 p = _crop(r, c.roi)
-                d = np.abs(_lab(p) - _lab(e))
-                diff = np.maximum(d[..., 0] * 0.5, np.maximum(d[..., 1], d[..., 2]) * 1.5)
-                otsu, _ = cv2.threshold(np.clip(diff, 0, 255).astype(np.uint8), 0, 255,
-                                        cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                levels.append(float(np.clip(otsu, 12, 60)))
-            c.fg_level = float(np.median(levels))
+                fg = _fg_mask(p, e, c.fg_level) > 0
+                lab = _lab(cv2.GaussianBlur(p, (3, 3), 0))
+                fg_areas.append(int(fg.sum()))
+                if fg.any():
+                    pixels.append(lab[fg])
+            c.colour_lab = [round(float(v), 1) for v in np.median(np.concatenate(pixels), axis=0)] if pixels else None
             for r in self.refs:
-                areas.append(cv2.countNonZero(_fg_mask(_crop(r, c.roi), e, c.fg_level)))
-            c.unit_area = float(np.median(areas)) / max(1, c.expected_count)
-            notes.append(f"{c.label}: unit area {c.unit_area:.0f}px, level {c.fg_level:.0f}")
+                p = _crop(r, c.roi)
+                mat = self._material_mask(c, p, e)
+                mat_areas.append(int(mat.sum()))
+            c.ref_fg_area = float(np.median(fg_areas))
+            c.ref_mat_area = float(np.median(mat_areas))
+            if c.method == "count":
+                counted = [cv2.countNonZero(self._count_mask(c, _crop(r, c.roi), e)) for r in self.refs]
+                c.unit_area = float(np.median(counted)) / max(1, c.expected_count)
+            seen = colour.describe(c.colour_lab)
+            notes.append(f"{c.label}: looks {seen}" + (f", material {c.material}" if c.material != "auto" else
+                         f" (suggest material '{colour.suggest(c.colour_lab)}')"))
+            if c.material in colour.RULED and c.ref_mat_area < 0.25 * max(1.0, c.ref_fg_area):
+                notes.append(f"  ! {c.label}: taught part doesn't look {c.material} under this light - check the setting")
         return notes
+
+    def _something(self, c: Component, patch: np.ndarray, empty_patch: np.ndarray):
+        """(median colour of whatever is in the pocket, True if it covers a part-sized area)."""
+        fg = _fg_mask(patch, empty_patch, min(c.fg_level, SOMETHING)) > 0
+        if not fg.any():
+            return None, False
+        seen = [float(v) for v in np.median(_lab(cv2.GaussianBlur(patch, (3, 3), 0))[fg], axis=0)]
+        return seen, fg.sum() >= 0.4 * c.ref_fg_area
+
+    def _count_mask(self, c: Component, patch: np.ndarray, empty_patch: np.ndarray) -> np.ndarray:
+        """Count shape from the difference mask; with a material rule, keep only blobs that are mostly
+        that material (a hand, rag or wrong fastener in the pocket isn't counted)."""
+        fg = _fg_mask(patch, empty_patch, c.fg_level)
+        if c.material not in colour.RULED:
+            return fg
+        rule = colour.class_mask(_lab(cv2.GaussianBlur(patch, (3, 3), 0)), c.material, c.colour_lab)
+        n, lab_ids, stats, _ = cv2.connectedComponentsWithStats(fg)
+        keep = np.zeros(n, bool)
+        for i in range(1, n):
+            blob = lab_ids == i
+            keep[i] = rule[blob].mean() >= 0.5
+        return (keep[lab_ids] & (fg > 0)).astype(np.uint8) * 255
+
+    def _material_mask(self, c: Component, patch: np.ndarray, empty_patch: np.ndarray) -> np.ndarray:
+        """Pixels that differ from the empty board AND (for ruled materials) look like the part's material."""
+        fg = _fg_mask(patch, empty_patch, c.fg_level) > 0
+        rule = colour.class_mask(_lab(cv2.GaussianBlur(patch, (3, 3), 0)), c.material, c.colour_lab)
+        return fg if rule is None else (fg & rule)
 
     # ---- per component checks
     def _presence(self, c: Component, live: np.ndarray):
@@ -221,17 +276,33 @@ class Inspector:
         else:
             score = float(np.clip(1.0 - d_full * 2, 0, 1))         # similarity to reference only
         found = c.expected_count if score >= c.threshold else 0
-        return found, score
+        wrong = None
+        if self.empty is not None and c.ref_fg_area > 0:
+            e = _crop(self.empty, c.roi)
+            seen, something_there = self._something(c, p, e)
+            if c.material in colour.RULED and c.ref_mat_area > 0:
+                mat_area = int(self._material_mask(c, p, e).sum())
+                if mat_area < 0.4 * c.ref_mat_area:
+                    found = 0                                      # not enough of the right colour
+                    if something_there and mat_area < 0.25 * c.ref_mat_area:
+                        wrong = seen
+            elif something_there and colour.distance(seen, c.colour_lab) > colour.PROFILE_TOL.get(c.material, 45):
+                found, wrong = 0, seen
+        return (found, score) if wrong is None else (found, score, wrong)
 
     def _count(self, c: Component, live: np.ndarray):
         if self.empty is None or c.unit_area <= 0:
             return self._presence(c, live)
-        mask = _fg_mask(_crop(live, c.roi), _crop(self.empty, c.roi), c.fg_level)
+        mask = self._count_mask(c, _crop(live, c.roi), _crop(self.empty, c.roi))
         area = cv2.countNonZero(mask)
         n, _, stats, _ = cv2.connectedComponentsWithStats(mask)
         blobs = int((stats[1:, cv2.CC_STAT_AREA] >= 0.35 * c.unit_area).sum()) if n > 1 else 0
         by_area = int(round(area / c.unit_area))
         found = max(by_area, blobs) if by_area > 0 else 0
+        if found == 0 and c.material in colour.RULED and c.ref_fg_area > 0:
+            seen, something_there = self._something(c, _crop(live, c.roi), _crop(self.empty, c.roi))
+            if something_there:                                # parts are there, but the wrong colour
+                return 0, 0.0, seen
         return found, area / (c.unit_area * c.expected_count)
 
     def inspect(self, frame: np.ndarray, board_ok_override: bool | None = None):
@@ -268,12 +339,18 @@ class Inspector:
         comps = []
         for c in self.board.components:
             blown = float((_crop(raw, c.roi).min(axis=2) >= lighting.CLIP).mean())
+            if blown > 0.3 and c.material == "white" and c.method == "presence":
+                comps.append(component_status(c, c.expected_count, 1.0))   # only a bright neutral part blows out
+                continue                                                    # every colour: the white part is there
             if blown > 0.3:           # glare: the part can't be seen, so don't call it missing or present
                 comps.append(ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "GLARE", 0.0,
                                              f"Can't see {c.label} - glare, adjust the light", c.roi))
                 continue
-            found, s = (self._count if c.method == "count" else self._presence)(c, live)
-            comps.append(component_status(c, found, s))
+            found, s, *wrong = (self._count if c.method == "count" else self._presence)(c, live)
+            if wrong:
+                comps.append(wrong_part(c, wrong[0], s))
+            else:
+                comps.append(component_status(c, found, s))
         bad = [r for r in comps if r.status != "OK"]
         glare = [r for r in comps if r.status == "GLARE"]
         msg = "PASS - board complete" if not bad else f"FAIL - {len(bad)} item(s) to fix"

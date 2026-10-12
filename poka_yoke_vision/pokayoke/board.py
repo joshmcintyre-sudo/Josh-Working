@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 METHODS = ("presence", "count")
+MATERIALS = ("auto", "steel", "black", "white", "bag", "colour")
 
 
 @dataclass
@@ -28,11 +29,17 @@ class Component:
     part_number: str = ""
     threshold: float = 0.5           # presence: 0..1 decision point (0.5 = halfway between empty and full)
     unit_area: float = 0.0           # count: learned px area of one part (set by calibrate)
-    fg_level: float = 25.0           # count: colour-difference level that counts as "part" (set by calibrate)
+    fg_level: float = 25.0           # colour-difference level that counts as "part" (set by calibrate)
+    material: str = "auto"           # steel | black | white | bag | colour | auto - what the part always looks like
+    colour_lab: list[float] | None = None   # learned median LAB colour of the part (set by calibrate)
+    ref_fg_area: float = 0.0         # learned px area that differs from the empty board (set by calibrate)
+    ref_mat_area: float = 0.0        # learned px area that matches the material rule (set by calibrate)
 
     def __post_init__(self):
         if self.method not in METHODS:
             raise ValueError(f"{self.id}: method must be one of {METHODS}")
+        if self.material not in MATERIALS:
+            raise ValueError(f"{self.id}: material must be one of {MATERIALS}")
         if len(self.roi) != 4 or self.roi[2] <= 0 or self.roi[3] <= 0:
             raise ValueError(f"{self.id}: roi must be [x, y, w, h] with w,h > 0")
         self.roi = [int(v) for v in self.roi]

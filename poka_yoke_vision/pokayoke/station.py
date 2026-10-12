@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from collections import Counter, deque
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -286,9 +287,12 @@ class Station:
         frames = [r for r in self.history if r.board_ok and len(r.components) == len(last.components)]
         comps = []
         for i, c in enumerate(self.inspector.board.components):
-            found = Counter(r.components[i].found for r in frames).most_common(1)[0][0]
+            # vote on (count, status) so a WRONG_PART / GLARE verdict survives the vote with its message
+            key = Counter((r.components[i].found, r.components[i].status) for r in frames).most_common(1)[0][0]
+            pick = next(r.components[i] for r in reversed(frames) if (r.components[i].found, r.components[i].status) == key)
             score = float(np.mean([r.components[i].score for r in frames]))
-            comps.append(component_status(c, found, score))
+            comps.append(component_status(c, pick.found, score) if pick.status in ("OK", "MISSING", "SHORT", "EXTRA")
+                         else replace(pick, score=round(score, 3)))
         bad = [c for c in comps if c.status != "OK"]
         msg = "PASS - board complete" if not bad else f"FAIL - {len(bad)} item(s) to fix"
         return InspectionResult(last.board_id, True, last.match_score, not bad, comps, msg)

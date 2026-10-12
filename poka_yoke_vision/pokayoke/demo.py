@@ -32,7 +32,7 @@ def bare_board(seed: int = 7) -> np.ndarray:
     return img
 
 
-def kitted(img: np.ndarray, bracket=True, seal=True, loom=True, bolts=6) -> np.ndarray:
+def kitted(img: np.ndarray, bracket=True, seal=True, loom=True, bolts=6, ties=True) -> np.ndarray:
     out = img.copy()
     if bracket:  # zinc bracket
         cv2.rectangle(out, (120, 120), (330, 230), (170, 170, 175), -1)
@@ -43,6 +43,10 @@ def kitted(img: np.ndarray, bracket=True, seal=True, loom=True, bolts=6) -> np.n
     if loom:     # loom in clear-ish blue bag
         cv2.rectangle(out, (950, 100), (1180, 330), (200, 120, 60), -1)
         cv2.ellipse(out, (1065, 215), (80, 60), 0, 0, 360, (30, 30, 200), 6)
+    if ties:     # bundle of white cable ties
+        cv2.rectangle(out, (660, 400), (860, 450), (238, 240, 242), -1)
+        for yy in (412, 425, 438):
+            cv2.line(out, (668, yy), (852, yy), (205, 208, 210), 2)
     for (x, y) in BOLTS[:bolts]:  # M8 bolts, dark heads
         cv2.circle(out, (x, y), 14, (50, 50, 55), -1)
         cv2.circle(out, (x, y), 5, (110, 110, 115), -1)
@@ -51,10 +55,11 @@ def kitted(img: np.ndarray, bracket=True, seal=True, loom=True, bolts=6) -> np.n
 
 def components() -> list[Component]:
     return [
-        Component("c1", "Mounting bracket LH", [110, 110, 230, 130], 1, "presence", "BRK-0412"),
-        Component("c2", "Door seal 450mm", [440, 120, 470, 60], 1, "presence", "SEAL-EPDM-450"),
-        Component("c3", "Wiring loom bag", [940, 90, 250, 250], 1, "presence", "LOOM-RR-02"),
-        Component("c4", "M8 x 25 flange bolt", [270, 490, 290, 60], 6, "count", "FAST-M8-25"),
+        Component("c1", "Mounting bracket LH", [110, 110, 230, 130], 1, "presence", "BRK-0412", material="steel"),
+        Component("c2", "Door seal 450mm", [440, 120, 470, 60], 1, "presence", "SEAL-EPDM-450", material="black"),
+        Component("c3", "Wiring loom bag", [940, 90, 250, 250], 1, "presence", "LOOM-RR-02", material="bag"),
+        Component("c4", "M8 x 25 flange bolt", [270, 490, 290, 60], 6, "count", "FAST-M8-25", material="black"),
+        Component("c5", "Cable tie bundle", [650, 390, 220, 70], 1, "presence", "TIE-200-WHT", material="white"),
     ]
 
 

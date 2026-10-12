@@ -127,16 +127,22 @@ def test_operator_learn_then_verify_workflow(tmp_path):
     assert c.post("/api/learn/capture").get_json()["step"] == "part"
 
     expected = {c_.label: c_.roi for c_ in demo.components()}
-    steps = [("Mounting bracket LH", dict(bracket=True, seal=False, loom=False, bolts=0), 1),
-             ("Door seal 450mm", dict(bracket=True, seal=True, loom=False, bolts=0), 1),
-             ("Wiring loom bag", dict(bracket=True, seal=True, loom=True, bolts=0), 1),
-             ("M8 x 25 flange bolt", dict(bracket=True, seal=True, loom=True, bolts=6), 6)]
+    steps = [("Mounting bracket LH", dict(bracket=True, seal=False, loom=False, bolts=0, ties=False), 1),
+             ("Door seal 450mm", dict(bracket=True, seal=True, loom=False, bolts=0, ties=False), 1),
+             ("Wiring loom bag", dict(bracket=True, seal=True, loom=True, bolts=0, ties=False), 1),
+             ("M8 x 25 flange bolt", dict(bracket=True, seal=True, loom=True, bolts=6, ties=False), 6),
+             ("Cable tie bundle", dict(bracket=True, seal=True, loom=True, bolts=6, ties=True), 1)]
     for label, kw, qty in steps:
         cam.frame = demo.kitted(bare, **kw)
         r = c.post("/api/learn/capture").get_json()
         assert r["step"] == "name", r
         assert _iou(r["proposal"], expected[label]) > 0.5, (label, r["proposal"])
-        r = c.post("/api/learn/part", json={"label": label, "qty": qty}).get_json()
+        want = {"Mounting bracket LH": "steel", "Door seal 450mm": "black", "Wiring loom bag": "colour",
+                "M8 x 25 flange bolt": "black", "Cable tie bundle": "white"}[label]
+        assert r["suggested_material"] == want, (label, r["suggested_material"])
+        mat = "bag" if label == "Wiring loom bag" else want          # operator overrides: it's a bag
+        r = c.post("/api/learn/part", json={"label": label, "qty": qty, "material": mat}).get_json()
+        assert r["parts"][-1]["material"] == mat
         assert r["step"] == "part"
     # capturing with nothing new placed must not invent a part
     assert c.post("/api/learn/capture").get_json()["step"] == "part"
@@ -146,7 +152,7 @@ def test_operator_learn_then_verify_workflow(tmp_path):
     assert c.post("/api/learn/save").get_json()["step"] == "saved"
 
     look = c.get("/api/lookup?code=SKU-99812").get_json()       # scanned barcode now finds the board
-    assert look["taught"] and look["parts"] == 4
+    assert look["taught"] and look["parts"] == 5
 
     # verify a short board -> operator confirms -> fail prompt
     cam.frame = demo.kitted(bare, bolts=3)

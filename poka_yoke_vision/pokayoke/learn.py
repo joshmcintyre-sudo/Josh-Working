@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from .board import Board, Component
-from . import lighting
+from . import colour, lighting
 from .inspector import Aligner
 
 STEPS = ("empty", "part", "name", "repeat", "done")
@@ -61,10 +61,25 @@ class LearnSession:
         warped, score, _ = self._aligner.align(frame)
         return warped if warped is not None and score > 0.2 else frame
 
+    def _suggest(self) -> str:
+        """Material the camera thinks the just-placed part is (operator confirms or changes it)."""
+        if self.proposal is None or self.pending is None or self.prev is None:
+            return "auto"
+        x, y, w, h = self.proposal
+        cur = self.pending[y:y + h, x:x + w]
+        before = lighting.match_global(self.prev, self.pending)[y:y + h, x:x + w]
+        lab = cv2.cvtColor(cv2.GaussianBlur(cur, (3, 3), 0), cv2.COLOR_BGR2LAB).astype(np.float32)
+        diff = np.abs(lab - cv2.cvtColor(before, cv2.COLOR_BGR2LAB).astype(np.float32)).max(axis=2)
+        changed = diff > max(20.0, float(np.percentile(diff, 60)))
+        if changed.sum() < 30:
+            return "auto"
+        return colour.suggest([float(v) for v in np.median(lab[changed], axis=0)])
+
     def state(self) -> dict:
         return {"step": self.step, "message": self.message, "proposal": self.proposal,
+                "suggested_material": self._suggest() if self.step == "name" else None,
                 "parts": [{"label": c.label, "part_number": c.part_number, "qty": c.expected_count,
-                           "method": c.method, "roi": c.roi} for c in self.components],
+                           "method": c.method, "material": c.material, "roi": c.roi} for c in self.components],
                 "ref_count": len(self.refs), "repeats": self.repeats, "board_id": self.board.board_id}
 
     def image(self) -> np.ndarray | None:
@@ -114,14 +129,15 @@ class LearnSession:
             self._repeat_message()
         return self.state()
 
-    def name_part(self, label: str, part_number: str = "", qty: int = 1) -> dict:
+    def name_part(self, label: str, part_number: str = "", qty: int = 1, material: str = "auto") -> dict:
         if self.step != "name" or not label.strip():
             self.message = "Enter a part name"
             return self.state()
         qty = max(1, int(qty))
         self.components.append(Component(
             id=f"c{len(self.components) + 1}", label=label.strip(), part_number=part_number.strip(),
-            roi=self.proposal, expected_count=qty, method="count" if qty > 1 else "presence"))
+            roi=self.proposal, expected_count=qty, method="count" if qty > 1 else "presence",
+            material=material if material in colour.MATERIALS else "auto"))
         self.prev, self.pending, self.proposal = self.pending, None, None
         self.step = "part"
         self.message = f"Saved. Load PART {len(self.components) + 1} and CAPTURE - or press ALL PARTS LOADED"

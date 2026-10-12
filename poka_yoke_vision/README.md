@@ -24,7 +24,7 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 126 tests: vision, lighting, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 141 tests: vision, lighting, colour/material, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
 ```
 
 ## Operator workflow (`/`) - scan order first
@@ -154,6 +154,15 @@ Point `results_dir` in `settings.json` at a network share / OneDrive / Box Drive
 - **Lighting matters most:** 2 diffused LED panels either side (~45°) beats any camera upgrade. Block direct sun/windows. Shiny zinc/bags cause glare – diffuse it.
 - **Board:** fixed locating stops on the bench help; the software also auto-aligns (shift/rotation tolerated). Matte, high-contrast shadow board (e.g. yellow/orange foam or painted MDF behind dark parts) gives the best results. Black EPDM seal on black foam = hard; use a contrasting colour pocket.
 - **QR label** on each board (any free generator, text = Board ID) for guaranteed right-board check when boards look similar.
+
+## Part colour / material
+
+Each part can be set to what it always looks like: **steel** (zinc, bright metal), **black** (rubber, black-oxide, black plastic), **white** (plastic, cable ties, labels), **bag** (clear or printed), **colour** (a coloured part: hue learned) or **auto**. Learn mode suggests it from the camera; the engineer screen has a Material column.
+- **Wrong part:** something is in the pocket but it's the wrong colour → **WRONG PART? Door seal should be black, this looks white**. It's never accepted as present, and never mislabelled as plain missing.
+- **Hands / rags / stray objects** in a pocket don't count as the part. When counting, each blob must be mostly the right material, so a fingertip next to 4 bolts still reads 4/6.
+- Colour limits follow each part's own taught colour, so shadows and exposure changes don't flip black to grey or white to grey. A white part that blows out under glare still counts as white.
+- Boards taught before this feature are colour-learned automatically on load (material = auto until set).
+- Tested in `tests/test_colour.py`: white seal for black, black bracket for zinc, zinc bolts for black, red bag for blue, black ties for white (also under dim, warm, gradient, shadow and exposure changes); a hand in an empty pocket; a fingertip among bolts.
 
 ## Lighting robustness
 

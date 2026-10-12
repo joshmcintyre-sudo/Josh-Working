@@ -73,7 +73,7 @@ input.scan.small { font-size:20px; width:min(360px, 100%); }
 ul.items { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; width:min(900px, 100%); }
 ul.items li { display:flex; gap:12px; padding:12px 14px; font-size:20px; text-align:left; border:1px solid var(--utm-black-80); border-left:6px solid var(--utm-black-60); }
 ul.items li b { flex:0 0 60px; font-weight:400; font-family:var(--utm-font-headline); }
-ul.items li.MISSING { border-left-color:var(--status-fail); }
+ul.items li.MISSING, ul.items li.WRONG_PART { border-left-color:var(--status-fail); }
 ul.items li.SHORT, ul.items li.EXTRA, ul.items li.GLARE { border-left-color:var(--utm-bronze); }
 .banner.warn { background:var(--utm-bronze); border-color:var(--utm-bronze); }
 ul.items li.OK { color:var(--muted); }

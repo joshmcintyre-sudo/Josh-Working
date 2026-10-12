@@ -50,6 +50,12 @@
       <input id="pLabel" class="scan" placeholder="Part name (e.g. M8 x 25 flange bolt)" autocomplete="off">
       <input id="pNum" class="scan small" placeholder="Part number / scan part barcode" autocomplete="off">
       <label>Quantity <input id="pQty" class="scan small" type="number" min="1" value="1"></label>
+      <label>Material / colour (always looks like)
+        <select id="pMat" class="scan small">
+          <option value="steel">Steel / zinc / bright metal</option><option value="black">Black (rubber, black-oxide, plastic)</option>
+          <option value="white">White (plastic, ties, labels)</option><option value="bag">Bag (clear or printed)</option>
+          <option value="colour">Coloured (red clip, blue bag...)</option><option value="auto">Not sure / mixed</option>
+        </select></label>
       <div class="row"><button class="cta huge" id="savePart">Save part</button><button id="retryPart">Wrong area - retry</button></div>
     </div>
     <div class="row" id="captureRow">
@@ -185,9 +191,9 @@ function renderLearn(s) {
   $("captureRow").hidden = !["empty", "part", "repeat", "undo"].includes(s.step);
   $("partsDone").hidden = $("undoPart").hidden = s.step !== "part" || !s.parts.length;
   $("saveBoard").hidden = s.step !== "done";
-  $("learnParts").innerHTML = s.parts.map(p => `<li>${p.qty} x ${esc(p.label)} <span class=hint>${esc(p.part_number)}</span></li>`).join("");
+  $("learnParts").innerHTML = s.parts.map(p => `<li>${p.qty} x ${esc(p.label)} <span class=hint>${esc(p.part_number)} · ${esc(p.material)}</span></li>`).join("");
   $("learnImg").src = s.step === "empty" ? "" : "/api/learn/image.jpg?" + Date.now();
-  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; $("pLabel").focus(); }
+  if (s.step === "name") { $("pLabel").value = ""; $("pNum").value = ""; $("pQty").value = 1; $("pMat").value = s.suggested_material || "auto"; $("pLabel").focus(); }
   else if (s.step === "done") $("saveBoard").focus(); else $("captureBtn").focus();
 }
 const L = (action, body) => api("/api/learn/" + action, body || {}).then(renderLearn).catch(fail);
@@ -195,7 +201,7 @@ $("captureBtn").onclick = () => L("capture");
 $("partsDone").onclick = () => L("parts_done");
 $("undoPart").onclick = () => confirm("Remove the last taught part?") && L("undo");
 $("retryPart").onclick = () => L("retry");
-const savePart = () => { if (!$("pLabel").value.trim()) return fail("Enter a part name"); L("part", {label: $("pLabel").value, part_number: $("pNum").value, qty: $("pQty").value}); };
+const savePart = () => { if (!$("pLabel").value.trim()) return fail("Enter a part name"); L("part", {label: $("pLabel").value, part_number: $("pNum").value, qty: $("pQty").value, material: $("pMat").value}); };
 $("savePart").onclick = savePart;
 onEnter("pLabel", () => $("pNum").focus()); onEnter("pNum", () => $("pQty").focus()); onEnter("pQty", savePart);
 $("saveBoard").onclick = async () => {
