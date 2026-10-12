@@ -1,0 +1,16 @@
+{
+  "name": "onshape-ai-bracket",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Onshape right-panel extension: describe a bracket in plain English, get a sized FeatureScript part.",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "express": "^4.21.2"
+  }
+}

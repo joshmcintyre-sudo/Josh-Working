@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Bracket</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#6b7280; --line:#e5e7eb; --accent:#0b6bcb; --ok:#15803d; --bad:#b91c1c; --warn:#a16207; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:12px; font:13px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  h1 { font-size:14px; margin:0 0 8px; }
+  textarea { width:100%; min-height:72px; padding:8px; border:1px solid var(--line); border-radius:6px; font:inherit; resize:vertical; }
+  button { padding:7px 12px; border:0; border-radius:6px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  button.secondary { background:#eef2f7; color:var(--fg); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:6px; margin:8px 0; flex-wrap:wrap; }
+  .card { border:1px solid var(--line); border-radius:6px; padding:8px; margin-top:10px; }
+  table { width:100%; border-collapse:collapse; }
+  td { padding:3px 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  td:last-child { text-align:right; white-space:nowrap; padding-left:8px; font-variant-numeric:tabular-nums; }
+  .muted { color:var(--muted); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  ul { margin:4px 0; padding-left:18px; }
+  .examples button { background:none; color:var(--accent); padding:2px 0; text-align:left; }
+</style>
+</head>
+<body>
+<h1>AI Bracket</h1>
+<textarea id="q" placeholder="e.g. make a bracket that mounts an M6 hole to an M8 bracket 35mm apart, strong enough to hold 25kg"></textarea>
+<div class="row">
+  <button id="go">Design</button>
+  <button id="insert" class="secondary" disabled>Insert into Part Studio</button>
+  <button id="reset" class="secondary">New</button>
+</div>
+<div class="examples muted" id="examples">Try:
+  <div><button>M6 to M8 bracket, 35mm apart, hold 25kg</button></div>
+  <div><button>Aluminium L bracket, M10 to wall, M8 load 60mm out, 40kg, ute canopy</button></div>
+  <div><button>3D printed flat strap, two M5 holes 80mm apart, 5kg pull</button></div>
+</div>
+<div id="out"></div>
+
+<script>
+const p = new URLSearchParams(location.search);
+const ctx = { documentId: p.get("documentId"), workspaceId: p.get("workspaceId"), elementId: p.get("elementId") };
+const headers = { "Content-Type": "application/json", "x-panel-token": p.get("token") || "" };
+let current = null; // { spec, design } - follow-up requests edit this
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function render({ spec, design: d }) {
+  const g = d.geometry;
+  const dims = g.style === "FLAT"
+    ? [["Hole spacing", g.spacing], ["Width", g.width], ["Thickness", g.thickness]]
+    : [["Base leg", g.baseLength], ["Upright leg", g.uprightHeight], ["Width", g.width], ["Thickness", g.thickness],
+       ["Mount hole from outer face", g.holeAOffset], ["Load hole height", g.holeBHeight], ["Inside bend radius", g.bendRadius]];
+  $("out").innerHTML = `
+    <div class="card"><b>${g.style === "FLAT" ? "Flat link" : "Angle bracket"}</b> &middot; ${esc(d.material)}<br>
+      <span class="muted">${spec.mount_hole} mount (&Oslash;${g.holeADia}) &rarr; ${spec.load_hole} load (&Oslash;${g.holeBDia}) &middot;
+      ${spec.load_kg} kg &middot; ${spec.load_case} &middot; SF ${d.inputs.safety_factor}</span>
+      <table>${dims.map(([k, v]) => `<tr><td>${k}</td><td>${v} mm</td></tr>`).join("")}
+        <tr><td>Mass</td><td>${d.mass_g} g</td></tr>
+        ${d.deflection_mm !== null ? `<tr><td>Deflection at working load</td><td>${d.deflection_mm} mm</td></tr>` : ""}</table></div>
+    <div class="card"><b>Checks</b> <span class="muted">design load ${d.design_load_N} N, governing: ${esc(d.governing)}</span>
+      <table>${d.checks.map((c) => `<tr><td>${esc(c.name)}<br><span class="muted">${esc(c.formula)}</span></td><td>t &ge; ${c.required_t_mm}</td></tr>`).join("")}
+      ${d.bolts.map((b) => `<tr><td>${b.size} ${b.class} bolt (${b.role})</td><td class="${b.ok ? "ok" : "bad"}">${Math.round(b.utilisation * 100)}%</td></tr>`).join("")}</table></div>
+    ${d.warnings.length ? `<div class="card warn"><b>Warnings</b><ul>${d.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    ${spec.assumptions.length ? `<div class="card"><b>Assumptions</b><ul>${spec.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
+    ${spec.questions.length ? `<div class="card"><b>Check these</b><ul>${spec.questions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
+    <p class="muted">Follow up in the box, e.g. "make it aluminium" or "SF 5, it's on a ute".</p>`;
+}
+
+$("go").onclick = async () => {
+  const query = $("q").value.trim();
+  if (!query) return;
+  $("go").disabled = true; $("go").textContent = "Thinking...";
+  try {
+    current = await post("/api/design", { query, current: current?.spec });
+    render(current);
+    $("q").value = ""; $("examples").hidden = true;
+    $("insert").disabled = !(ctx.documentId && ctx.workspaceId && ctx.elementId);
+  } catch (e) { $("out").innerHTML = `<div class="card bad">${esc(e.message)}</div>`; }
+  $("go").disabled = false; $("go").textContent = current ? "Update" : "Design";
+};
+
+$("insert").onclick = async () => {
+  $("insert").disabled = true;
+  try {
+    const r = await post("/api/insert", { ...ctx, geometry: current.design.geometry,
+      name: `${current.spec.mount_hole}-${current.spec.load_hole} ${current.spec.load_kg}kg bracket` });
+    $("insert").textContent = r.state === "OK" ? "Inserted" : `Inserted (${r.state})`;
+  } catch (e) { alert(e.message); }
+  setTimeout(() => { $("insert").textContent = "Insert into Part Studio"; $("insert").disabled = false; }, 2000);
+};
+
+$("reset").onclick = () => { current = null; $("out").innerHTML = ""; $("examples").hidden = false; $("go").textContent = "Design"; $("insert").disabled = true; };
+document.querySelectorAll("#examples button").forEach((b) => b.onclick = () => { $("q").value = b.textContent; $("go").click(); });
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("go").click(); });
+</script>
+</body>
+</html>
