@@ -37,11 +37,11 @@ async function load() {
   const rows = await (await fetch("/api/log?" + p)).json();
   $("count").textContent = `${rows.length} record(s)`;
   $("rows").innerHTML = rows.map(r => `<tr>
-    <td>${esc((r.finished || "").replace("T", " "))}</td><td><b>${esc(r.order_ref)}</b></td>
+    <td>${esc((r.finished || "").slice(0, 19).replace("T", " "))}</td><td><b>${esc(r.order_ref)}</b></td>
     <td>${esc((r.order_type || "").replace("_", " ").toLowerCase())}</td><td>${esc(r.board_id)}</td><td>${esc(r.operator)}</td>
     <td class="res ${esc(r.vision_result)}">${esc(r.vision_result)}</td>
     <td class="res ${esc(r.final_result)}">${esc((r.final_result || "").replace("_", " "))}</td>
-    <td>${r.qc_by ? esc(r.qc_by) + " " + esc((r.qc_at || "").slice(11)) + (r.qc_note ? "<br><span class=hint>" + esc(r.qc_note) + "</span>" : "") : ""}</td>
+    <td>${r.qc_by ? esc(r.qc_by) + " " + esc((r.qc_at || "").slice(11, 19)) + (r.qc_note ? "<br><span class=hint>" + esc(r.qc_note) + "</span>" : "") : ""}</td>
     <td class="hint">${esc(r.problems)}</td>
     <td>${r.image_url ? `<a href="${esc(r.image_url)}" target="_blank"><img src="${esc(r.image_url)}" alt=""></a>` : ""}</td>
     <td class="hint">${esc(r.export_status)}</td></tr>`).join("");

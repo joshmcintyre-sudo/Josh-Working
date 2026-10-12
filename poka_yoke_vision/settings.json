@@ -14,17 +14,33 @@
   "results_dir": "results",
   "host": "127.0.0.1",
   "port": 8080,
-  "order_types": {"W": "Work order", "S": "Sales order"},
+  "order_types": {
+    "W": "Work order",
+    "S": "Sales order"
+  },
   "order_pattern": "^[A-Z]\\d{4,10}$",
   "qc_must_differ": true,
   "camera_scan": true,
   "camera_scan_auto": true,
   "scan_fps": 5,
-  "ops_hub_origins": ["https://*.lovable.app"],
+  "ops_hub_origins": [
+    "https://opshub.utemaster.com",
+    "https://umopshub.lovable.app",
+    "https://*.lovable.app"
+  ],
   "export": {
     "retry_seconds": 60,
-    "webhook": {"enabled": false, "url": "https://<ops-hub-project>.supabase.co/functions/v1/pokayoke-ingest",
-                "token_header": "x-pokayoke-key", "send_started": true, "send_image": true},
-    "box": {"enabled": false, "folder_id": "", "subject_type": "enterprise"}
+    "webhook": {
+      "enabled": true,
+      "url": "https://bhviwenfznilluoxftva.supabase.co/functions/v1/pokayoke-ingest",
+      "token_header": "x-pokayoke-key",
+      "send_started": true,
+      "send_image": true
+    },
+    "box": {
+      "enabled": false,
+      "folder_id": "",
+      "subject_type": "enterprise"
+    }
   }
 }

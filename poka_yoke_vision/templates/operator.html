@@ -145,7 +145,7 @@ async function showModel() {
   ctx.board = null; show("model");
   const o = ctx.order, prev = o.history || [];
   $("orderCard").innerHTML = `<div class="step">${esc(o.order_label)}</div><div class="big">${esc(o.order_ref)}</div>` +
-    (prev.length ? `<div class="warnText">Already checked ${prev.length}x - last: ${esc(prev[0].final_result)} ${esc(prev[0].finished.replace("T", " "))} (${esc(prev[0].board_id)})</div>`
+    (prev.length ? `<div class="warnText">Already checked ${prev.length}x - last: ${esc(prev[0].final_result)} ${esc(prev[0].finished.slice(0, 19).replace("T", " "))} (${esc(prev[0].board_id)})</div>`
                  : `<div class="meta">No previous checks for this order</div>`);
   $("modelCard").innerHTML = ""; $("verifyBtn").disabled = $("learnBtn").disabled = true;
   const list = await api("/api/boards");
@@ -246,7 +246,7 @@ function showResult(s) {
   $("resultBanner").textContent = pass ? "Board confirmed" : qc ? "QC confirmed" : res === "NO_RESULT" ? "Unable to confirm" : "Items missing";
   $("resultMsg").textContent = s.prompt || "";
   $("resultItems").innerHTML = pass ? "" : items(s.result, true);
-  if (qc) $("resultItems").innerHTML += `<li class="OK"><b>QC</b> Physically confirmed by ${esc(s.qc.by)} at ${esc(s.qc.at.slice(11))}${s.qc.note ? " - " + esc(s.qc.note) : ""}</li>`;
+  if (qc) $("resultItems").innerHTML += `<li class="OK"><b>QC</b> Physically confirmed by ${esc(s.qc.by)} at ${esc(s.qc.at.slice(11, 19))}${s.qc.note ? " - " + esc(s.qc.note) : ""}</li>`;
   $("failActions").hidden = pass || qc; $("qcBox").hidden = true;
   $("file").innerHTML = s.last_file ? `Saved: <code>${esc(s.last_file)}</code>` : "";
   (pass || qc ? $("nextOrder") : $("recheck")).focus();

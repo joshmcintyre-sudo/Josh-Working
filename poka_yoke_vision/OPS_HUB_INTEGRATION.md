@@ -34,11 +34,11 @@ Ops Hub MES checklist (browser, logged in)          Station PC (this app, http:/
 - Every record carries `launch_id` and `launch` {checklist, step, model, source}. Events: `started`, `completed`, `qc_confirmed` (a re-check sends another `completed`; latest wins).
 - **Return to Ops Hub** button on the result screen.
 
-Station settings once Ops Hub is built:
+Station settings (now set in `settings.json`; Ops Hub build commit `7a60d1ac`, 12/10/2026):
 ```json
-"ops_hub_origins": ["https://*.lovable.app", "https://<your custom ops hub domain>"],
+"ops_hub_origins": ["https://opshub.utemaster.com", "https://umopshub.lovable.app", "https://*.lovable.app"],
 "export": {
-  "webhook": {"enabled": true, "url": "https://<project>.supabase.co/functions/v1/pokayoke-ingest",
+  "webhook": {"enabled": true, "url": "https://bhviwenfznilluoxftva.supabase.co/functions/v1/pokayoke-ingest",
               "token_header": "x-pokayoke-key", "send_started": true, "send_image": true},
   "box": {"enabled": false}
 }
@@ -55,6 +55,8 @@ The prompt sent to the Operations Hub V2 project is in the session history and s
 5. Integrations card: station URL and recent checks.
 
 ## Test plan
+
+Full step-by-step verification with SQL checks and sign-off: [OPS_HUB_VERIFICATION.md](OPS_HUB_VERIFICATION.md). Quick version:
 
 1. Station PC: run `install_windows.bat`, teach one board whose Board ID or learned barcode = the order's assembly item.
 2. Ops Hub: add a Poka-yoke step to a test checklist (e.g. on order `TEST123`) → **Launch** → station opens on the verify screen.

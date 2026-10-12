@@ -46,7 +46,7 @@ python -m pytest -q tests                                      # 126 tests: visi
 
 ## Launched from Ops Hub MES checklists
 
-An Ops Hub checklist step **Poka-yoke Board Check** opens this app on the station PC with the order and model already filled in. The station goes straight to verify, and the result goes back into that checklist step. The photo is archived to Box by Ops Hub's existing Box worker. Setup and flow: [OPS_HUB_INTEGRATION.md](OPS_HUB_INTEGRATION.md).
+An Ops Hub checklist step **Poka-yoke Board Check** opens this app on the station PC with the order and model already filled in. The station goes straight to verify, and the result goes back into that checklist step. The photo is archived to Box by Ops Hub's existing Box worker. Setup and flow: [OPS_HUB_INTEGRATION.md](OPS_HUB_INTEGRATION.md). Go-live checks: [OPS_HUB_VERIFICATION.md](OPS_HUB_VERIFICATION.md).
 - One-time on the station PC: `install_windows.bat` (starts the app at login and registers `pokayoke://` links).
 - `ops_hub_origins` lists which web apps may launch the station / receive the Return link.
 

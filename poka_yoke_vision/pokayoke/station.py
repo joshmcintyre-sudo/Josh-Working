@@ -178,7 +178,7 @@ class Station:
         order = parse_order(order_ref, self.s.get("order_types"), self.s.get("order_pattern")) if order_ref else \
             {"order_ref": "", "order_type": ""}
         self.job = {"order_ref": order["order_ref"], "order_type": order["order_type"], "operator": operator,
-                    "started": datetime.now().isoformat(timespec="seconds"), "session_id": uuid.uuid4().hex,
+                    "started": datetime.now().astimezone().isoformat(timespec="seconds"), "session_id": uuid.uuid4().hex,
                     "launch": _clean_launch(launch)}
         self._send_started()
         self.history.clear()
@@ -305,7 +305,7 @@ class Station:
 
     # ------------------------------------------------ output
     def _write_result(self) -> dict:
-        now = datetime.now()
+        now = datetime.now().astimezone()        # timezone-aware: Ops Hub stores timestamptz
         res = self.latest
         # an image not fit to judge (too dark, glare, covered lens) is recorded as NO_RESULT, not FAIL
         vision = "NO_RESULT" if res is None or not res.lighting_ok else ("PASS" if res.passed else "FAIL")
@@ -352,7 +352,7 @@ class Station:
             raise RuntimeError("QC initials required")
         if self.s.get("qc_must_differ", True) and qc_by.lower() == (rec.get("operator") or "").strip().lower():
             raise RuntimeError("Secondary QC must be a different person to the operator")
-        rec["qc"] = {"by": qc_by, "note": note.strip(), "at": datetime.now().isoformat(timespec="seconds"),
+        rec["qc"] = {"by": qc_by, "note": note.strip(), "at": datetime.now().astimezone().isoformat(timespec="seconds"),
                      "statement": "Physically confirmed by secondary QC"}
         rec["result"] = "QC_CONFIRMED"
         rec["event"] = "qc_confirmed"
