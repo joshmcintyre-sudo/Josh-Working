@@ -1,0 +1,6 @@
+results/
+demo_images/
+boards/DEMO-HILUX-01/
+.venv/
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,14 @@
+{
+  "station_name": "PY-STATION-1",
+  "camera_index": 0,
+  "width": 1280,
+  "height": 720,
+  "fps": 2,
+  "stable_frames": 3,
+  "auto_stop_pass_seconds": 0,
+  "qr_autoselect": false,
+  "boards_dir": "boards",
+  "results_dir": "results",
+  "host": "127.0.0.1",
+  "port": 8080
+}

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poka-Yoke Teach</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Teach / Build Boards</h1>
+  <a href="/">&larr; Operator screen</a>
+</header>
+<main class="teach">
+  <section>
+    <div class="row" style="margin-bottom:10px">
+      <button id="prevBtn">Live preview</button>
+      <button id="capEmpty">1. Capture EMPTY board</button>
+      <button id="capRef">2. Capture GOOD board (reference)</button>
+      <button id="clearRefs">Clear references</button>
+      <button id="testBtn" class="primary">Test current view</button>
+    </div>
+    <div class="canvaswrap"><canvas id="cv" width="1280" height="720"></canvas></div>
+    <p class="hint">Drag on the reference image to draw a box around each part location. Click a box to select it, Delete key removes it.
+      Show: <select id="show"></select></p>
+  </section>
+  <aside class="panel">
+    <div class="row">
+      <label>Board <select id="board"></select></label>
+      <button id="newBtn">New board</button>
+    </div>
+    <div class="row">
+      <label>Name <input id="name"></label>
+      <label>Product line <input id="pline" placeholder="e.g. Hilux DC"></label>
+    </div>
+    <div class="row">
+      <label><span><input type="checkbox" id="align" checked> Auto-align board</span></label>
+      <label>Min board match <input id="minmatch" type="number" step="0.05" min="0" max="1" style="width:80px"></label>
+    </div>
+    <div class="hint" id="info"></div>
+    <table>
+      <thead><tr><th>Label</th><th>Part #</th><th>Qty</th><th>Method</th><th>Thr</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <button id="saveBtn" class="go">Save &amp; calibrate</button>
+    <div class="hint" id="notes"></div>
+    <pre class="hint" id="testOut" style="white-space:pre-wrap"></pre>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+let board = null, img = new Image(), sel = -1, drag = null, previewOn = false, liveTimer = null;
+
+async function api(path, body, method) {
+  const opts = method || body !== undefined ? {method: method || "POST", headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body)} : {};
+  const r = await fetch(path, opts); const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+const say = m => $("notes").textContent = m;
+
+async function loadList(pick) {
+  const list = await api("/api/boards");
+  $("board").innerHTML = list.map(b => `<option value="${b.board_id}">${b.board_id} - ${b.name}</option>`).join("");
+  if (pick) $("board").value = pick;
+  if ($("board").value) await loadBoard($("board").value);
+}
+
+async function loadBoard(id) {
+  board = await api("/api/boards/" + id);
+  $("name").value = board.name; $("pline").value = board.product_line;
+  $("align").checked = board.align; $("minmatch").value = board.min_match_score;
+  $("info").textContent = `${board.reference_images.length} reference image(s), empty board: ${board.empty_image ? "yes" : "NO (needed for counting)"}`;
+  const imgs = [...board.reference_images, ...(board.empty_image ? [board.empty_image] : [])];
+  $("show").innerHTML = imgs.map(n => `<option>${n}</option>`).join("");
+  sel = -1; showImage(imgs[0]); rows();
+}
+
+function showImage(name) {
+  if (!name) { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = "#888"; ctx.font = "28px sans-serif"; ctx.fillText("Capture a GOOD board reference to start", 40, 60); return; }
+  img = new Image(); img.onload = () => { cv.width = img.width; cv.height = img.height; draw(); };
+  img.src = `/api/boards/${board.board_id}/image/${name}?${Date.now()}`;
+}
+
+function draw() {
+  ctx.drawImage(img, 0, 0);
+  (board?.components || []).forEach((c, i) => {
+    const [x, y, w, h] = c.roi;
+    ctx.lineWidth = 3; ctx.strokeStyle = i === sel ? "#2f80ed" : "#ffd400"; ctx.strokeRect(x, y, w, h);
+    const t = `${c.label} x${c.expected_count}`, ty = y - 6 < 14 ? y + 18 : y - 6;
+    ctx.font = "bold 16px sans-serif"; ctx.fillStyle = "rgba(0,0,0,.75)";
+    ctx.fillRect(x, ty - 16, ctx.measureText(t).width + 8, 21);
+    ctx.fillStyle = ctx.strokeStyle; ctx.fillText(t, x + 4, ty);
+  });
+  if (drag?.w) { ctx.strokeStyle = "#2f80ed"; ctx.setLineDash([6, 4]); ctx.strokeRect(drag.x, drag.y, drag.w, drag.h); ctx.setLineDash([]); }
+}
+
+function rows() {
+  $("rows").innerHTML = board.components.map((c, i) => `<tr class="${i === sel ? "sel" : ""}" data-i="${i}">
+    <td><input data-k="label" value="${c.label}"></td><td><input data-k="part_number" value="${c.part_number || ""}"></td>
+    <td><input data-k="expected_count" type="number" min="1" value="${c.expected_count}" style="width:52px"></td>
+    <td><select data-k="method"><option ${c.method === "presence" ? "selected" : ""}>presence</option><option ${c.method === "count" ? "selected" : ""}>count</option></select></td>
+    <td><input data-k="threshold" type="number" step="0.05" value="${c.threshold}" style="width:58px"></td></tr>`).join("");
+  $("rows").querySelectorAll("input,select").forEach(el => el.onchange = e => {
+    const i = +e.target.closest("tr").dataset.i, k = e.target.dataset.k;
+    board.components[i][k] = ["expected_count"].includes(k) ? parseInt(e.target.value) : k === "threshold" ? parseFloat(e.target.value) : e.target.value;
+    draw();
+  });
+  $("rows").querySelectorAll("tr").forEach(tr => tr.onclick = () => { sel = +tr.dataset.i; draw(); highlight(); });
+}
+const highlight = () => $("rows").querySelectorAll("tr").forEach(tr => tr.classList.toggle("sel", +tr.dataset.i === sel));
+
+function pt(e) { const r = cv.getBoundingClientRect(); return {x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height}; }
+cv.onmousedown = e => { if (!board || previewOn) return; const p = pt(e); drag = {x0: p.x, y0: p.y}; };
+cv.onmousemove = e => { if (!drag) return; const p = pt(e);
+  Object.assign(drag, {x: Math.min(p.x, drag.x0), y: Math.min(p.y, drag.y0), w: Math.abs(p.x - drag.x0), h: Math.abs(p.y - drag.y0)}); draw(); };
+cv.onmouseup = e => {
+  const d = drag; drag = null; if (!d) return;
+  if (!d.w || d.w < 8 || d.h < 8) {           // click: select box
+    const p = pt(e); sel = board.components.findIndex(c => p.x >= c.roi[0] && p.x <= c.roi[0] + c.roi[2] && p.y >= c.roi[1] && p.y <= c.roi[1] + c.roi[3]);
+    draw(); highlight(); return;
+  }
+  const label = prompt("Part label shown to operator (e.g. M8 flange bolt, Door seal, Loom bag LH):");
+  if (!label) { draw(); return; }
+  const n = board.components.length + 1;
+  board.components.push({id: "c" + Date.now().toString(36), label, part_number: "", roi: [d.x, d.y, d.w, d.h].map(Math.round),
+    expected_count: 1, method: "presence", threshold: 0.5, unit_area: 0, fg_level: 25});
+  sel = n - 1; rows(); draw();
+};
+document.addEventListener("keydown", e => {
+  if (e.key === "Delete" && sel >= 0 && e.target.tagName !== "INPUT") { board.components.splice(sel, 1); sel = -1; rows(); draw(); }
+});
+
+$("board").onchange = () => loadBoard($("board").value);
+$("show").onchange = () => showImage($("show").value);
+$("newBtn").onclick = async () => {
+  const id = prompt("Board ID (as printed on the board label, e.g. PY-HILUX-DC-001):"); if (!id) return;
+  const r = await api("/api/boards", {board_id: id, name: prompt("Description:") || id, product_line: prompt("Product line:") || ""});
+  await loadList(r.board_id);
+};
+$("saveBtn").onclick = async () => {
+  try {
+    const r = await api("/api/boards/" + board.board_id, {name: $("name").value, product_line: $("pline").value,
+      align: $("align").checked, min_match_score: parseFloat($("minmatch").value), components: board.components}, "PUT");
+    say("Saved. " + (r.notes || []).join(" | ")); await loadBoard(board.board_id);
+  } catch (e) { say("Error: " + e.message); }
+};
+async function capture(kind) {
+  try { await setPreview(false); const r = await api(`/api/boards/${board.board_id}/capture/${kind}`, {}); say("Captured " + r.saved);
+    await loadBoard(board.board_id); } catch (e) { say("Error: " + e.message); }
+}
+$("capEmpty").onclick = () => capture("empty");
+$("capRef").onclick = () => capture("ref");
+$("clearRefs").onclick = async () => { if (confirm("Delete all reference images for this board?")) {
+  await api(`/api/boards/${board.board_id}/refs`, undefined, "DELETE"); loadBoard(board.board_id); } };
+
+async function setPreview(on) {
+  if (on === previewOn) return; await api("/api/preview", {on}); previewOn = on;
+  $("prevBtn").textContent = on ? "Stop preview" : "Live preview";
+  clearInterval(liveTimer);
+  if (on) liveTimer = setInterval(() => { const im = new Image(); im.onload = () => { cv.width = im.width; cv.height = im.height; ctx.drawImage(im, 0, 0); };
+    im.src = "/api/frame.jpg?" + Date.now(); }, 500);
+  else showImage($("show").value);
+}
+$("prevBtn").onclick = () => setPreview(!previewOn).catch(e => say("Error: " + e.message));
+$("testBtn").onclick = async () => {
+  try { await setPreview(false); const r = await api(`/api/boards/${board.board_id}/test`, {});
+    $("testOut").textContent = `${r.message}  (board match ${r.match_score})\n` + r.components.map(c => `${c.status.padEnd(7)} ${c.found}/${c.expected}  score ${c.score}  ${c.label}`).join("\n");
+    const im = new Image(); im.onload = () => { cv.width = im.width; cv.height = im.height; ctx.drawImage(im, 0, 0); }; im.src = "/api/frame.jpg?" + Date.now();
+  } catch (e) { say("Error: " + e.message); }
+};
+loadList();
+</script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poka-Yoke Check</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Poka-Yoke Board Check <small>{{ station }}</small></h1>
+  <a href="/teach">Teach boards &rarr;</a>
+</header>
+<main class="op">
+  <section class="left">
+    <div class="controls">
+      <label>Board <select id="board"></select></label>
+      <label>Job / WO <input id="job" placeholder="e.g. WO-10452"></label>
+      <label>Operator <input id="operator" placeholder="initials"></label>
+      <button id="start" class="go">START</button>
+      <button id="stop" class="stop" disabled>STOP &amp; SAVE</button>
+    </div>
+    <div class="video"><img id="video" alt=""><div id="idle">Press START to begin inspection</div></div>
+  </section>
+  <aside class="right">
+    <div id="banner" class="banner idle">READY</div>
+    <ul id="items"></ul>
+    <div id="file" class="file"></div>
+    <div id="error" class="error"></div>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let poll = null;
+
+async function api(path, body, method) {
+  const r = await fetch(path, body === undefined && !method ? {} :
+    {method: method || "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+async function loadBoards() {
+  const boards = await api("/api/boards");
+  const keep = localStorage.getItem("py_board");
+  $("board").innerHTML = '<option value="">(auto from QR label)</option>' + boards.map(b =>
+    `<option value="${b.board_id}">${b.product_line ? b.product_line + " / " : ""}${b.name} [${b.board_id}]</option>`).join("");
+  if (keep) $("board").value = keep;
+}
+
+function render(s) {
+  const r = s.result;
+  const b = $("banner");
+  $("error").textContent = s.error || "";
+  if (s.mode !== "inspect" && !r) { b.className = "banner idle"; b.textContent = "READY"; $("items").innerHTML = ""; return; }
+  if (!r) { b.className = "banner idle"; b.textContent = "LOOKING..."; return; }
+  b.className = "banner " + (r.passed ? "pass" : "fail");
+  b.textContent = r.passed ? "PASS" : (r.board_ok ? "FAIL" : "WRONG BOARD");
+  const order = {MISSING: 0, SHORT: 1, EXTRA: 2, OK: 3};
+  const comps = [...r.components].sort((a, c) => order[a.status] - order[c.status]);
+  $("items").innerHTML = r.board_ok
+    ? comps.map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${c.status === "OK" ? c.label : c.message}</li>`).join("")
+    : `<li class="MISSING">${r.message}</li>`;
+}
+
+async function tick() {
+  try {
+    const s = await api("/api/status");
+    render(s);
+    if (s.mode !== "inspect") stopped(s);
+  } catch (e) { $("error").textContent = e.message; }
+}
+
+function running(on) {
+  $("start").disabled = on; $("stop").disabled = !on;
+  ["board", "job", "operator"].forEach(id => $(id).disabled = on);
+  $("idle").style.display = on ? "none" : "flex";
+  $("video").src = on ? "/video.mjpg?" + Date.now() : "";
+}
+
+function stopped(s) {
+  clearInterval(poll); poll = null; running(false);
+  if (s && s.last_file) $("file").innerHTML = `Saved: <code>${s.last_file}</code>`;
+}
+
+$("start").onclick = async () => {
+  localStorage.setItem("py_board", $("board").value);
+  $("file").textContent = ""; $("error").textContent = "";
+  try {
+    await api("/api/start", {board_id: $("board").value, job_ref: $("job").value, operator: $("operator").value});
+    running(true); poll = setInterval(tick, 500);
+  } catch (e) { $("error").textContent = e.message; }
+};
+
+$("stop").onclick = async () => {
+  const rec = await api("/api/stop", {});
+  await tick();
+  stopped({last_file: rec.error ? "" : (await api("/api/status")).last_file});
+};
+
+document.addEventListener("keydown", e => {        // foot pedal / barcode wedge friendly
+  if (e.target.tagName === "INPUT") return;
+  if (e.code === "Space" || e.code === "Enter") { e.preventDefault(); (poll ? $("stop") : $("start")).click(); }
+});
+loadBoards();
+</script>
+</body>
+</html>
