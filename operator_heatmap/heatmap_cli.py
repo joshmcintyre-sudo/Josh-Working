@@ -3,14 +3,16 @@
 
 Examples
   python heatmap_cli.py line3.mp4 --segments "00:05:00-00:20:00, 01:10:00-01:25:00"
+  python heatmap_cli.py "Internal 360 3_2026_10_08.mp4" --profile auto      (areas drawn in the app)
   python heatmap_cli.py roof360.mp4 --camera fisheye --mount-height 7.5
   python heatmap_cli.py cell360.mp4 --camera 360 --yaw 90 --pitch -30 --fov 110
   python heatmap_cli.py line3.mp4 --config examples/zones_example.json --base-time 00:06:10
 """
 import argparse
+import json
 import sys
 
-from operator_heatmap import Options, run
+from operator_heatmap import Options, profiles, run
 
 
 def main():
@@ -44,9 +46,27 @@ def main():
     ap.add_argument("--tiles", type=int, default=6)
     ap.add_argument("--roi", default="", help='area isolation JSON, e.g. \'{"include":[{"sector":[200,320,20,90]}]}\'')
     ap.add_argument("--no-crop", dest="crop_output", action="store_false", help="keep full view in PDF")
+    ap.add_argument("--profile", default="",
+                    help='camera profile saved by the app, e.g. "Internal 360 3" (areas + camera settings). '
+                         '"auto" = from the video file name')
     a = ap.parse_args()
 
-    opts = Options(**{k: v for k, v in vars(a).items()})
+    args = vars(a)
+    name = args.pop("profile")
+    if name:  # reuse the areas drawn in the app for this camera
+        if name == "auto":
+            name = profiles.camera_name_from_file(a.video)
+        prof = profiles.load(name)
+        if not prof:
+            sys.exit(f"No camera profile '{name}' in {profiles.DIR} - open the clip in the app and draw the areas first")
+        if not args["roi"]:
+            args["roi"] = json.dumps(prof.get("areas", {}))
+        args["camera"] = prof.get("camera", args["camera"])
+        if not args["mount_height"]:
+            args["mount_height"] = prof.get("mount_height", 0.0)
+        args["lens_fov"] = prof.get("lens_fov", args["lens_fov"])
+        print(f"profile        {name}: {sum(len(v) for v in prof.get('areas', {}).values())} area(s), camera {args['camera']}")
+    opts = Options(**args)
     last = [-1]
 
     def progress(p):

@@ -10,6 +10,7 @@ import cv2
 import pandas as pd
 import streamlit as st
 
+from operator_heatmap import profiles
 from operator_heatmap.area_draw import area_draw, shapes_to_spec, spec_to_shapes
 from operator_heatmap.fisheye import detect_circle
 from operator_heatmap.pipeline import Options, report, track
@@ -95,15 +96,51 @@ with st.sidebar:
     st.markdown("### Footage")
     up = st.file_uploader("Upload video", type=["mp4", "mov", "avi", "mkv", "m4v"], label_visibility="collapsed")
     local = st.text_input("...or file path", "", placeholder=r"C:\Footage\cam3.mp4").strip().strip('"')
-    camera = CAMERAS[st.selectbox("Camera", list(CAMERAS))]
+
+    video_path = None
+    if up is not None:
+        video_path = os.path.join(WORK, up.name)
+        if not os.path.exists(video_path) or os.path.getsize(video_path) != up.size:
+            with open(video_path, "wb") as fh:
+                fh.write(up.getbuffer())
+    elif local:
+        if os.path.exists(local):
+            video_path = local
+        else:
+            st.error("File not found")
+
+    # Camera profile: areas + camera settings remembered per camera, reloaded automatically
+    if video_path and st.session_state.get("cam_for") != video_path:
+        st.session_state.cam_for = video_path
+        st.session_state.cam_name = profiles.camera_name_from_file(video_path)
+        st.session_state.pop("profile_loaded", None)
+    cam_name = st.text_input("Camera name", key="cam_name", disabled=not video_path,
+                             help="Areas and settings are saved under this name and reloaded next time "
+                                  "(taken from the Nx export file name)").strip()
+    if video_path and cam_name and st.session_state.get("profile_loaded") != cam_name:
+        prof = profiles.load(cam_name)
+        st.session_state.profile_loaded = cam_name
+        st.session_state.shapes = spec_to_shapes(prof.get("areas", {}))
+        if prof.get("camera") in CAMERAS.values():
+            st.session_state.camera_sel = next(k for k, v in CAMERAS.items() if v == prof["camera"])
+        st.session_state.mount_height = float(prof.get("mount_height", 0.0))
+        st.session_state.lens_fov = float(prof.get("lens_fov", 180.0))
+        st.session_state.profile_msg = (f"Loaded saved areas for '{cam_name}'" if prof.get("areas")
+                                        else f"New camera '{cam_name}' - draw an Include area round the cell")
+
+    st.session_state.setdefault("mount_height", 0.0)
+    st.session_state.setdefault("lens_fov", 180.0)
+    camera = CAMERAS[st.selectbox("Camera", list(CAMERAS), key="camera_sel")]
     title = st.text_input("Report title", "", placeholder="e.g. Line 3 - Shift A")
 
     view = View360()
     mount_height, lens_fov = 0.0, 180.0
     if camera == "fisheye":
         c1, c2 = st.columns(2)
-        mount_height = c1.number_input("Height (m)", 0.0, 30.0, 0.0, 0.1, help="Lens height above floor -> metres walked. 0 = skip")
-        lens_fov = c2.number_input("Lens FOV°", 120.0, 220.0, 180.0, 1.0, help="From camera datasheet, usually 180-187")
+        mount_height = c1.number_input("Height (m)", 0.0, 30.0, step=0.1, key="mount_height",
+                                       help="Lens height above floor -> metres walked. 0 = skip")
+        lens_fov = c2.number_input("Lens FOV°", 120.0, 220.0, step=1.0, key="lens_fov",
+                                   help="From camera datasheet, usually 180-187")
     elif camera == "360":
         view.yaw = st.slider("Yaw (left/right)", -180, 180, 0)
         view.pitch = st.slider("Pitch (down/up)", -90, 30, -20)
@@ -128,18 +165,6 @@ with st.sidebar:
     with st.expander("Zones config (optional)"):
         cfg = st.file_uploader("Zones + calibration JSON", type=["json"],
                                help="Named zones -> minutes per zone + trips between zones")
-
-video_path = None
-if up is not None:
-    video_path = os.path.join(WORK, up.name)
-    if not os.path.exists(video_path) or os.path.getsize(video_path) != up.size:
-        with open(video_path, "wb") as fh:
-            fh.write(up.getbuffer())
-elif local:
-    if os.path.exists(local):
-        video_path = local
-    else:
-        st.sidebar.error("File not found")
 
 cfg_path = ""
 if cfg is not None:
@@ -192,16 +217,25 @@ with right:
     st.markdown("### 2. Areas")
     n = {k: len(v) for k, v in spec.items()}
     st.caption(f"Include {n['include']} · Exclude {n['exclude']} · Doorways {n['entry']} · "
-               f"analysing {roi.coverage if roi else 1:.0%} of the frame (black borders skipped)" +
-               ("" if n["include"] else " (no include area = whole view)"))
+               f"analysing {roi.coverage if roi else 1:.0%} of the frame (black borders skipped)")
+    if not n["include"]:
+        st.warning("No Include area - the whole view will be analysed (slower, and nearby aisles/benches can "
+                   "confuse the count). Click **Include → Polygon** and click tightly round the cell.", icon="⚠️")
+    if cam_name:  # auto-save the camera profile whenever areas or camera settings change
+        saved = profiles.save_if_changed(cam_name, {"camera": camera, "mount_height": mount_height,
+                                                    "lens_fov": lens_fov, "areas": spec})
+        msg = st.session_state.pop("profile_msg", None)
+        st.caption((msg + " · " if msg else "") + (f"Saved to camera profile '{cam_name}'" if saved
+                                                   else f"Camera profile '{cam_name}' up to date"))
     c1, c2 = st.columns(2)
-    c1.download_button("Save areas", json.dumps(spec, indent=1), f"areas_{os.path.splitext(os.path.basename(video_path))[0]}.json",
+    c1.download_button("Export areas", json.dumps(spec, indent=1), f"areas_{profiles.safe(cam_name or 'camera')}.json",
                        "application/json", width="stretch", disabled=not st.session_state.shapes,
-                       help="Save once per camera, load next time")
-    with c2.popover("Load areas", width="stretch"):
+                       help="Copy areas to another PC. On this PC they are saved automatically per camera name")
+    with c2.popover("Import areas", width="stretch"):
         loaded = st.file_uploader("Areas JSON", type=["json"], label_visibility="collapsed", key="load_areas")
         if loaded is not None and st.button("Apply", key="apply_areas"):
-            st.session_state.shapes = spec_to_shapes(json.load(loaded))
+            data = json.load(loaded)
+            st.session_state.shapes = spec_to_shapes(data.get("areas", data))
             st.rerun()
 
     st.markdown("### 3. Time segments")

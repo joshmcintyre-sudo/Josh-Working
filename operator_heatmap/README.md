@@ -53,6 +53,14 @@ python heatmap_cli.py line3.mp4 --config examples/zones_example.json --page A3
 - `calibration`: 4 image points ↔ 4 floor points in metres (pallet corners, floor-tape) → **metres walked**, m/hour. Or `{"px_per_m": 85}`
 - Get pixel coords: open `*_combined.png` in Paint (bottom-left shows x,y) and hover
 
+## Camera profiles (areas remembered per camera)
+- Sidebar **Camera name** is filled from the Nx export file name (e.g. `Internal 360 3_2026_10_08.mp4` → `Internal 360 3`)
+- Draw an **Include** area tight round the cell (Include → Polygon → click round the cell → double-click). A warning shows until you do
+- Areas + camera type/height/lens save automatically to `cameras\<camera name>.json` and reload next time that camera is opened
+- Command line / nightly job reuses them: `python heatmap_cli.py "Internal 360 3_2026_10_08.mp4" --profile auto`
+- Measured: 30 s fisheye clip, whole view 2 min 44 s → include area 54 s (~3× faster)
+- Export/Import areas copies a profile's areas to another PC (or copy the `cameras` folder)
+
 ## Naming people + per-person reports
 - After a run, **People** panel = one card per person (snapshot, minutes, tracks)
 - Type a name (e.g. `Josh`) → Apply names. Same name on two cards = merged. Team names group people. `ignore` drops
