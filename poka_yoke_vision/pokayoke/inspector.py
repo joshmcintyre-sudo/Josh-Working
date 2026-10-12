@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 import cv2
 import numpy as np
 
+from . import lighting
 from .board import Board, Component
 
 PATCH = 24  # presence patches are shrunk to <= 24 px: tolerant to small part shifts / wrinkles
@@ -47,14 +48,6 @@ def _patch_dist(a: np.ndarray, b: np.ndarray) -> float:
     return float(0.7 * pix * 4 + 0.3 * hist)  # pix scaled so both terms are ~0..1
 
 
-def _match_lighting(img: np.ndarray, ref: np.ndarray) -> np.ndarray:
-    """Global gain/offset on L channel so shop lighting drift doesn't read as a missing part."""
-    li, lr = _lab(img), _lab(ref)
-    m_i, s_i = li[..., 0].mean(), li[..., 0].std() + 1e-6
-    m_r, s_r = lr[..., 0].mean(), lr[..., 0].std() + 1e-6
-    li[..., 0] = np.clip((li[..., 0] - m_i) * (s_r / s_i) + m_r, 0, 255)
-    return cv2.cvtColor(li.astype(np.uint8), cv2.COLOR_LAB2BGR)
-
 
 def _fg_mask(live: np.ndarray, empty: np.ndarray, level: float) -> np.ndarray:
     d = np.abs(_lab(cv2.GaussianBlur(live, (5, 5), 0)) - _lab(cv2.GaussianBlur(empty, (5, 5), 0)))
@@ -69,14 +62,14 @@ class Aligner:
     def __init__(self, ref: np.ndarray, n_features: int = 3000):
         self.shape = ref.shape[:2]
         self.orb = cv2.ORB_create(n_features)
-        self.kp, self.des = self.orb.detectAndCompute(cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY), None)
+        self.kp, self.des = self.orb.detectAndCompute(lighting.clahe_gray(ref), None)
         self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
 
     def align(self, frame: np.ndarray):
         """Return (warped_frame_in_ref_coords | None, match_score 0..1, homography | None)."""
         if self.des is None or len(self.kp) < 20:
             return None, 0.0, None
-        kp, des = self.orb.detectAndCompute(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None)
+        kp, des = self.orb.detectAndCompute(lighting.clahe_gray(frame), None)
         if des is None or len(kp) < 20:
             return None, 0.0, None
         pairs = self.matcher.knnMatch(des, self.des, k=2)
@@ -105,7 +98,7 @@ class ComponentResult:
     part_number: str
     expected: int
     found: int
-    status: str        # OK | MISSING | SHORT | EXTRA
+    status: str        # OK | MISSING | SHORT | EXTRA | GLARE (part area blown out, can't be judged)
     score: float
     message: str
     roi: list[int]
@@ -119,6 +112,8 @@ class InspectionResult:
     passed: bool
     components: list[ComponentResult]
     message: str
+    lighting_ok: bool = True        # False = image not fit to judge (too dark, glare, covered lens)
+    lighting: dict | None = None    # brightness / clipped / relative-to-reference measurements
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -153,15 +148,16 @@ class Inspector:
         self.base = self.refs[0]
         # Align on the bare board when we have it: its features don't change when parts go missing.
         self.aligner = Aligner(self.empty if self.empty is not None else self.base) if board.align else None
-        # Bring extra references into the coordinate frame of reference #1.
-        self.refs = [self.base] + [self._to_base(r) for r in self.refs[1:]]
-        if self.empty is not None:
-            self.empty = self._to_base(self.empty)
-        # Bare-board area (outside every part box) is used to confirm it's the right board.
+        # Bare-board area (outside every part box): confirms the right board and measures the lighting.
         self.bg_mask = np.full(self.base.shape[:2], 255, np.uint8)
         for c in board.components:
             x, y, w, h = c.roi
             self.bg_mask[max(0, y):y + h, max(0, x):x + w] = 0
+        # Bring extra references (and the empty board) into reference #1's position AND lighting,
+        # so references taught at different times of day compare like for like.
+        self.refs = [self.base] + [lighting.correct(self._to_base(r), self.base, self.bg_mask) for r in self.refs[1:]]
+        if self.empty is not None:
+            self.empty = lighting.correct(self._to_base(self.empty), self.base, self.bg_mask)
 
     def _board_similarity(self, live: np.ndarray, H, frame: np.ndarray) -> float:
         """NCC of the bare-board background vs reference: ~1 same board, ~0 different board."""
@@ -246,22 +242,50 @@ class Inspector:
             live, score, H = self.aligner.align(frame)
         else:
             live, score, H = frame, 1.0, None
-        if live is not None:
-            score = min(score, self._board_similarity(live, H, frame))
-        board_ok = live is not None and score >= self.board.min_match_score
+        if live is None:
+            q = lighting.assess(frame)
+            if not q.ok:                         # can't even find the board because it's too dark / blown out
+                return self._unfit(q, frame), frame
+            return InspectionResult(self.board.board_id, False, round(score, 3), False, [],
+                                    "WRONG BOARD or board not in view"), frame
+        mask = self.bg_mask
+        if H is not None:
+            hh, ww = self.base.shape[:2]
+            valid = cv2.warpPerspective(np.full(frame.shape[:2], 255, np.uint8), H, (ww, hh))
+            mask = cv2.bitwise_and(mask, cv2.erode(valid, np.ones((15, 15), np.uint8)))
+        q = lighting.assess(live, self.base, mask)
+        if not q.ok:
+            return self._unfit(q, live), live
+        raw = live
+        live = lighting.correct(live, self.base, mask)
+        score = min(score, self._board_similarity(live, H, frame))
+        board_ok = score >= self.board.min_match_score
         if board_ok_override is False:
             board_ok = False
         if not board_ok:
             return InspectionResult(self.board.board_id, False, round(score, 3), False, [],
-                                    "WRONG BOARD or board not in view"), frame
-        live = _match_lighting(live, self.base)
+                                    "WRONG BOARD or board not in view", lighting=vars(q)), frame
         comps = []
         for c in self.board.components:
+            blown = float((_crop(raw, c.roi).min(axis=2) >= lighting.CLIP).mean())
+            if blown > 0.3:           # glare: the part can't be seen, so don't call it missing or present
+                comps.append(ComponentResult(c.id, c.label, c.part_number, c.expected_count, 0, "GLARE", 0.0,
+                                             f"Can't see {c.label} - glare, adjust the light", c.roi))
+                continue
             found, s = (self._count if c.method == "count" else self._presence)(c, live)
             comps.append(component_status(c, found, s))
         bad = [r for r in comps if r.status != "OK"]
+        glare = [r for r in comps if r.status == "GLARE"]
         msg = "PASS - board complete" if not bad else f"FAIL - {len(bad)} item(s) to fix"
-        return InspectionResult(self.board.board_id, True, round(score, 3), not bad, comps, msg), live
+        if glare:
+            msg = f"CHECK LIGHTING - glare on {len(glare)} item(s)"
+            q.ok, q.message = False, msg
+        return InspectionResult(self.board.board_id, True, round(score, 3), not bad, comps, msg,
+                                lighting_ok=q.ok, lighting=vars(q)), live
+
+    def _unfit(self, q: "lighting.Quality", img: np.ndarray) -> InspectionResult:
+        return InspectionResult(self.board.board_id, False, 0.0, False, [], q.message,
+                                lighting_ok=False, lighting=vars(q))
 
 
 # ---------------------------------------------------------------- drawing

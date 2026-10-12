@@ -9,14 +9,15 @@ import cv2
 import numpy as np
 
 from .board import Board, Component
-from .inspector import Aligner, _match_lighting
+from . import lighting
+from .inspector import Aligner
 
 STEPS = ("empty", "part", "name", "repeat", "done")
 
 
 def find_added_part(prev: np.ndarray, curr: np.ndarray, min_frac: float = 0.0004, pad: int = 12):
     """Box around what changed between two aligned captures (the part just placed), or None."""
-    curr = _match_lighting(curr, prev)
+    curr = lighting.match_global(curr, prev)
     a = cv2.GaussianBlur(prev, (7, 7), 0).astype(np.int16)
     b = cv2.GaussianBlur(curr, (7, 7), 0).astype(np.int16)
     diff = np.abs(a - b).max(axis=2).astype(np.uint8)

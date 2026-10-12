@@ -215,7 +215,7 @@ async function startVerify() {
 }
 function items(r, onlyBad) {
   if (!r) return "";
-  if (!r.board_ok) return `<li class="MISSING">${esc(r.message)}</li>`;
+  if (!r.board_ok) return `<li class="${r.lighting_ok === false ? "GLARE" : "MISSING"}">${esc(r.message)}</li>`;
   const order = {MISSING: 0, SHORT: 1, EXTRA: 2, OK: 3};
   return [...r.components].filter(c => !onlyBad || c.status !== "OK").sort((a, c) => order[a.status] - order[c.status])
     .map(c => `<li class="${c.status}"><b>${c.found}/${c.expected}</b> ${esc(c.status === "OK" ? c.label : c.message)}</li>`).join("");
@@ -225,8 +225,8 @@ async function tick() {
     const s = await api("/api/status");
     if (s.mode !== "inspect") return showResult(s);         // auto-confirmed on stable PASS
     const r = s.result; if (!r) return;
-    $("banner").className = "banner " + (r.passed ? "pass" : "fail");
-    $("banner").textContent = r.passed ? "Pass" : (r.board_ok ? "Check" : "Wrong board");
+    $("banner").className = "banner " + (r.passed ? "pass" : r.lighting_ok === false ? "warn" : "fail");
+    $("banner").textContent = r.passed ? "Pass" : r.lighting_ok === false ? "Check lighting" : (r.board_ok ? "Check" : "Wrong board");
     $("frame").className = "frame " + (r.passed ? "pass" : "fail");
     $("items").innerHTML = items(r);
   } catch (e) { fail(e); }

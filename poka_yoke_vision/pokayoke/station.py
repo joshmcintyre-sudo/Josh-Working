@@ -281,8 +281,8 @@ class Station:
     def _stable(self) -> InspectionResult:
         """Vote over the last N frames so a hand passing over the board doesn't flip the result."""
         last = self.history[-1]
-        if not last.board_ok or len(self.history) == 1:
-            return last
+        if not last.board_ok or not last.lighting_ok or len(self.history) == 1:
+            return last                     # wrong board / bad light is shown as-is, never voted into a PASS
         frames = [r for r in self.history if r.board_ok and len(r.components) == len(last.components)]
         comps = []
         for i, c in enumerate(self.inspector.board.components):
@@ -307,7 +307,8 @@ class Station:
     def _write_result(self) -> dict:
         now = datetime.now()
         res = self.latest
-        vision = "NO_RESULT" if res is None else ("PASS" if res.passed else "FAIL")
+        # an image not fit to judge (too dark, glare, covered lens) is recorded as NO_RESULT, not FAIL
+        vision = "NO_RESULT" if res is None or not res.lighting_ok else ("PASS" if res.passed else "FAIL")
         stem = "_".join(x for x in (self.job.get("order_ref"), self.board_id or "unknown", f"{now:%Y%m%d-%H%M%S}") if x)
         stem = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in stem)
         record = {

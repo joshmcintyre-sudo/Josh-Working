@@ -24,7 +24,7 @@ Try it with no camera:
 ```bash
 python -m pokayoke.demo                                        # builds DEMO-HILUX-01 board
 python -m pokayoke.app --image demo_images/missing_parts.png   # -> FAIL: seal missing, need 2 more bolts
-python -m pytest -q tests                                      # 34 tests: vision, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
+python -m pytest -q tests                                      # 126 tests: vision, lighting, learn→verify, orders, QC, log, export, Ops Hub launch, camera barcode scanning: pass/missing/short/moved/lighting/wrong board/API
 ```
 
 ## Operator workflow (`/`) - scan order first
@@ -155,11 +155,22 @@ Point `results_dir` in `settings.json` at a network share / OneDrive / Box Drive
 - **Board:** fixed locating stops on the bench help; the software also auto-aligns (shift/rotation tolerated). Matte, high-contrast shadow board (e.g. yellow/orange foam or painted MDF behind dark parts) gives the best results. Black EPDM seal on black foam = hard; use a contrasting colour pocket.
 - **QR label** on each board (any free generator, text = Board ID) for guaranteed right-board check when boards look similar.
 
+## Lighting robustness
+
+Lighting changes across shifts, seasons and lamp positions, so the engine corrects for it before judging, and refuses to judge images it can't see.
+- **Correction:** the bare board outside the part boxes is the same material in the taught photo and the live frame. Per-colour live/taught ratios there map the lighting on a 32 x 18 grid, filled in under the parts and divided out. This cancels dimming, brightening, left-to-right or top-to-bottom gradients, spotlights, soft shadows and warm/cool white balance in one step. References taught at different times of day are brought to the same lighting too.
+- **Alignment** uses contrast-equalised images, so the board is still found in dim or flat light.
+- **Quality gate:** too dark, blown-out, or blank/covered lens → amber **CHECK LIGHTING / CHECK CAMERA**, never PASS or FAIL; saved as `NO_RESULT`.
+- **Glare on one part:** if a part's area is blown out (every colour maxed), it shows **"Can't see <part> - glare"** instead of a false MISSING; the rest of the board is still checked.
+- **Tested** (`tests/test_lighting.py`, 92 cases) under: 50% and 30% light with noise, 1.6x over-exposure, left-right and top-bottom gradients (0.45-1.3x), spotlight, warm and cool white balance, a soft shadow across the parts, an exposure-curve change, sensor noise, combinations of these, and the board moved on the bench. Wrong boards stay rejected under every condition.
+- **Cost:** about 0.18 s per frame on one CPU core.
+- **Still worth doing on site:** diffused lights, no direct sun on the board, matte boards. Teach one reference in daylight and one at night if the bench sees both.
+
 ## How it works
 
 1. **Align**: ORB features + RANSAC homography warp the live frame onto the reference ([OpenCV tutorial](https://docs.opencv.org/4.x/d1/de0/tutorial_py_feature_homography.html)).
 2. **Right board?** Feature-match quality × correlation of the bare-board background outside the part boxes (`min_match_score`, default 0.5; same board ≈ 0.95+, different board ≈ 0.1 in tests).
-3. **Lighting** normalised to the reference (global gain/offset).
+3. **Lighting** corrected with a per-colour lighting map measured on the bare board (see Lighting robustness); unusable images are refused.
 4. **Per part**: `presence` = LAB colour + histogram distance to good vs empty; `count` = foreground area vs empty board ÷ unit area, plus blob count.
 5. **Vote** over last N frames → screen + result file.
 
