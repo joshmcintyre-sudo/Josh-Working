@@ -63,6 +63,13 @@ export function SchematicCanvas({
   }, [linkFromNodeId])
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null)
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
+  // Dragging empty canvas pans the view. Tracked separately from node drag —
+  // a node's own pointer handler stops propagation, so this only ever starts
+  // on the background.
+  const [pan, setPan] = useState<{ startX: number; startY: number; vx: number; vy: number } | null>(
+    null,
+  )
+  const didPan = useRef(false)
 
   const toCanvas = useCallback(
     (clientX: number, clientY: number) => {
@@ -78,11 +85,18 @@ export function SchematicCanvas({
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      if (pan) {
+        const dx = e.clientX - pan.startX
+        const dy = e.clientY - pan.startY
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didPan.current = true
+        setView((v) => ({ ...v, x: pan.vx + dx, y: pan.vy + dy }))
+        return
+      }
       const p = toCanvas(e.clientX, e.clientY)
       if (linkFrom) setPointer(p)
       if (drag) onMoveNode(drag.id, { x: Math.round(p.x - drag.dx), y: Math.round(p.y - drag.dy) })
     },
-    [drag, linkFrom, onMoveNode, toCanvas],
+    [drag, linkFrom, onMoveNode, pan, toCanvas],
   )
 
   // Escape cancels a half-drawn run rather than leaving it dangling.
@@ -106,20 +120,49 @@ export function SchematicCanvas({
     <div className="relative h-full w-full overflow-hidden bg-neutral-950">
       <svg
         ref={svgRef}
-        className={cn('h-full w-full touch-none', drag ? 'cursor-grabbing' : 'cursor-default')}
+        className={cn(
+          'h-full w-full touch-none',
+          drag ? 'cursor-grabbing' : pan ? 'cursor-grabbing' : 'cursor-grab',
+        )}
+        onPointerDown={(e) => {
+          // Node/edge handlers stop propagation (nodes) or leave the target as
+          // themselves (edges) — only a bare hit on the SVG itself is empty
+          // canvas, which is what pans.
+          if (linkFrom || drag || e.target !== svgRef.current) return
+          ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+          didPan.current = false
+          setPan({ startX: e.clientX, startY: e.clientY, vx: view.x, vy: view.y })
+        }}
         onPointerMove={onPointerMove}
-        onPointerUp={() => setDrag(null)}
-        onPointerLeave={() => setDrag(null)}
+        onPointerUp={() => {
+          setDrag(null)
+          setPan(null)
+        }}
+        onPointerLeave={() => {
+          setDrag(null)
+          setPan(null)
+        }}
         onClick={(e) => {
+          if (didPan.current) {
+            // A drag just ended on empty canvas — treat it as a pan, not a
+            // click that should clear the selection.
+            didPan.current = false
+            return
+          }
           if (e.target === svgRef.current) {
             onSelect(null)
             setLinkFrom(null)
           }
         }}
         onWheel={(e) => {
-          if (!e.ctrlKey && !e.metaKey) return
           e.preventDefault()
-          setView((v) => ({ ...v, scale: Math.min(2.5, Math.max(0.3, v.scale - e.deltaY * 0.002)) }))
+          if (e.ctrlKey || e.metaKey) {
+            setView((v) => ({ ...v, scale: Math.min(2.5, Math.max(0.3, v.scale - e.deltaY * 0.002)) }))
+            return
+          }
+          // Plain scroll pans — a mouse wheel has no other way to move the
+          // view, and that is the first thing anyone tries.
+          setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }))
         }}
       >
         <defs>
@@ -138,7 +181,7 @@ export function SchematicCanvas({
             <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
           </marker>
         </defs>
-        <rect width="100%" height="100%" fill="url(#grid)" />
+        <rect width="100%" height="100%" fill="url(#grid)" pointerEvents="none" />
 
         <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
           {analysis.edges.map((ea) => {
@@ -225,7 +268,11 @@ export function SchematicCanvas({
       </svg>
 
       <div className="pointer-events-none absolute bottom-2 left-2 flex gap-2 text-[11px] text-neutral-600">
-        <span>{linkFrom ? 'Click a target node to connect — Esc to cancel' : 'Drag to move · ⌘-scroll to zoom'}</span>
+        <span>
+          {linkFrom
+            ? 'Click a target node to connect — Esc to cancel'
+            : 'Scroll or drag empty space to pan · Ctrl+scroll to zoom'}
+        </span>
       </div>
       <div className="absolute bottom-2 right-2 flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900/90 px-1.5 py-1 text-[11px] text-neutral-400">
         <button

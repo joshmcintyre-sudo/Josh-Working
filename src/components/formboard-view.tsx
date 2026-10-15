@@ -41,11 +41,21 @@ export function FormboardView({
   const [showWires, setShowWires] = useState(false)
   /** Dragging a bend point: which segment, and which point in its routing. */
   const [bend, setBend] = useState<{ segmentId: string; index: number } | null>(null)
+  // Pan/zoom on top of the fixed fit-to-sheet viewBox below. Dragging empty
+  // board or a plain scroll pans; Ctrl/Cmd+scroll or the +/- buttons zoom.
+  const [view, setView] = useState({ x: 0, y: 0, scale: 1 })
+  const [pan, setPan] = useState<{ startX: number; startY: number; vx: number; vy: number } | null>(
+    null,
+  )
+  const didPan = useRef(false)
 
   const board = layout.board
   const pad = 60
   const viewBox = `${-pad} ${-pad} ${board.width_mm + pad * 2} ${board.height_mm + pad * 2}`
 
+  // Screen point to board-mm, in the fixed viewBox's own space — unaffected
+  // by the pan/zoom group below. Used for panning itself, where a screen
+  // pixel's worth of movement should mean the same offset at any zoom level.
   const toBoard = useCallback((clientX: number, clientY: number) => {
     const svg = svgRef.current
     if (!svg) return { x: 0, y: 0 }
@@ -58,6 +68,16 @@ export function FormboardView({
     return { x: p.x, y: p.y }
   }, [])
 
+  // The logical board-mm position under the cursor, accounting for the
+  // pan/zoom the user has applied. This is what drag and bend handles need.
+  const toContent = useCallback(
+    (clientX: number, clientY: number) => {
+      const p = toBoard(clientX, clientY)
+      return { x: (p.x - view.x) / view.scale, y: (p.y - view.y) / view.scale }
+    },
+    [toBoard, view],
+  )
+
   const mismatched = new Set(layout.lengthMismatches.map((m) => m.circuitId))
 
   return (
@@ -66,12 +86,40 @@ export function FormboardView({
         ref={svgRef}
         viewBox={viewBox}
         preserveAspectRatio="xMidYMid meet"
-        className="h-full w-full touch-none"
+        className={cn('h-full w-full touch-none', pan ? 'cursor-grabbing' : 'cursor-grab')}
+        onPointerDown={(e) => {
+          // Node and bend handles stop propagation, so a pointerdown that
+          // reaches the bare svg is always empty board — drag it to pan.
+          if (drag || bend || e.target !== svgRef.current) return
+          ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+          didPan.current = false
+          const start = toBoard(e.clientX, e.clientY)
+          setPan({ startX: start.x, startY: start.y, vx: view.x, vy: view.y })
+        }}
+        onWheel={(e) => {
+          e.preventDefault()
+          if (e.ctrlKey || e.metaKey) {
+            setView((v) => ({ ...v, scale: Math.min(4, Math.max(0.2, v.scale - e.deltaY * 0.002)) }))
+            return
+          }
+          // Divide by the viewBox's own screen scale so a wheel notch pans by
+          // the same felt amount regardless of how zoomed in the view is.
+          const k = svgRef.current?.getScreenCTM()?.a || 1
+          setView((v) => ({ ...v, x: v.x - e.deltaX / k, y: v.y - e.deltaY / k }))
+        }}
         onPointerMove={(e) => {
+          if (pan) {
+            const p = toBoard(e.clientX, e.clientY)
+            const dx = p.x - pan.startX
+            const dy = p.y - pan.startY
+            if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didPan.current = true
+            setView((v) => ({ ...v, x: pan.vx + dx, y: pan.vy + dy }))
+            return
+          }
           const step = snap ? 10 : 1
           const round = (v: number) => Math.max(0, Math.round(v / step) * step)
           if (bend) {
-            const p = toBoard(e.clientX, e.clientY)
+            const p = toContent(e.clientX, e.clientY)
             const segment = analysis.loom.segments?.find((s) => s.id === bend.segmentId)
             if (!segment) return
             const next = [...(segment.routing ?? [])]
@@ -80,19 +128,28 @@ export function FormboardView({
             return
           }
           if (!drag) return
-          const p = toBoard(e.clientX, e.clientY)
+          const p = toContent(e.clientX, e.clientY)
           onMoveNode(drag.id, { x: round(p.x - drag.dx), y: round(p.y - drag.dy) })
         }}
         onPointerUp={() => {
           setDrag(null)
           setBend(null)
+          setPan(null)
         }}
         onPointerLeave={() => {
           setDrag(null)
           setBend(null)
+          setPan(null)
         }}
-        onClick={(e) => e.target === svgRef.current && onSelect(null)}
+        onClick={(e) => {
+          if (didPan.current) {
+            didPan.current = false
+            return
+          }
+          if (e.target === svgRef.current) onSelect(null)
+        }}
       >
+        <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
         <defs>
           <pattern id="fbgrid" width={GRID_MM} height={GRID_MM} patternUnits="userSpaceOnUse">
             <path
@@ -104,7 +161,7 @@ export function FormboardView({
           </pattern>
         </defs>
 
-        <rect x={0} y={0} width={board.width_mm} height={board.height_mm} fill="url(#fbgrid)" />
+        <rect x={0} y={0} width={board.width_mm} height={board.height_mm} fill="url(#fbgrid)" pointerEvents="none" />
         <rect
           x={0}
           y={0}
@@ -113,6 +170,7 @@ export function FormboardView({
           fill="none"
           stroke="#3f3f3f"
           strokeWidth={4}
+          pointerEvents="none"
         />
 
         {/* Board ruler ticks every 100 mm, labelled every 500 mm. */}
@@ -151,7 +209,7 @@ export function FormboardView({
               onDoubleClick={(e) => {
                 if (!onRouteSegment) return
                 e.stopPropagation()
-                const p = toBoard(e.clientX, e.clientY)
+                const p = toContent(e.clientX, e.clientY)
                 const segment = analysis.loom.segments?.find((x) => x.id === trunk.segmentId)
                 const existing = segment?.routing ?? []
                 // Insert the new bend into the leg it was dropped on, so the
@@ -303,7 +361,7 @@ export function FormboardView({
               onPointerDown={(e) => {
                 e.stopPropagation()
                 ;(e.target as Element).setPointerCapture?.(e.pointerId)
-                const p = toBoard(e.clientX, e.clientY)
+                const p = toContent(e.clientX, e.clientY)
                 setDrag({ id: n.id, dx: p.x - n.x_mm, dy: p.y - n.y_mm })
                 onSelect({ kind: 'node', id: n.id })
               }}
@@ -353,7 +411,33 @@ export function FormboardView({
             </g>
           )
         })}
+        </g>
       </svg>
+
+      <div className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900/90 px-1.5 py-1 text-[11px] text-neutral-400">
+        <button
+          className="pointer-events-auto px-1.5 hover:text-neutral-100"
+          onClick={() => setView((v) => ({ ...v, scale: Math.max(0.2, v.scale - 0.15) }))}
+        >
+          −
+        </button>
+        <span className="w-10 text-center tabular-nums">{Math.round(view.scale * 100)}%</span>
+        <button
+          className="pointer-events-auto px-1.5 hover:text-neutral-100"
+          onClick={() => setView((v) => ({ ...v, scale: Math.min(4, v.scale + 0.15) }))}
+        >
+          +
+        </button>
+        <button
+          className="pointer-events-auto ml-1 border-l border-neutral-800 pl-2 hover:text-neutral-100"
+          onClick={() => setView({ x: 0, y: 0, scale: 1 })}
+        >
+          Reset
+        </button>
+      </div>
+      <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded-md border border-neutral-800 bg-neutral-900/90 px-2 py-1 text-[11px] text-neutral-600">
+        Scroll or drag empty board to pan · Ctrl+scroll to zoom
+      </div>
 
       <div className="absolute left-2 top-2 flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-900/90 px-2 py-1 text-[11px] text-neutral-400">
         <span>
