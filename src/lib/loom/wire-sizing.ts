@@ -177,6 +177,13 @@ function evaluate(size: WireSize, input: SizingInput, conductorTemp_c: number): 
 export function sizeWire(input: SizingInput): SizingResult {
   const conductorTemp_c = input.conductorTemp_c ?? 20
   const dropLimit = input.dropLimit ?? dropLimitFor(input.class)
+  // `dropLimit` can be tightened by the caller to force a bigger gauge than the
+  // class budget strictly requires (the drop-allocation pass does this to make
+  // a path that fails in aggregate fit). That is a sizing instruction, not a
+  // change to the circuit's real budget — everything reported back, here and
+  // in the rationale, states the true class budget so the number on the
+  // drawing and the cumulative-path check are never the tightened target.
+  const reportedLimit = dropLimitFor(input.class)
   const warnings: string[] = []
   const errors: string[] = []
 
@@ -247,7 +254,7 @@ export function sizeWire(input: SizingInput): SizingResult {
       circuitResistance_ohm: 0,
       voltageDrop_v: 0,
       voltageDropPct: 0,
-      dropLimitPct: dropLimit * 100,
+      dropLimitPct: reportedLimit * 100,
       deratedAmpacity_a: 0,
       baseAmpacity_a: 0,
       ampacityUtilisationPct: 0,
@@ -313,7 +320,7 @@ export function sizeWire(input: SizingInput): SizingResult {
     )
   }
 
-  const rationale = buildRationale(chosen, limiting, final, amp.value, dropLimit, input)
+  const rationale = buildRationale(chosen, limiting, final, amp.value, reportedLimit, input)
 
   return {
     ok: errors.length === 0,
@@ -326,7 +333,7 @@ export function sizeWire(input: SizingInput): SizingResult {
     circuitResistance_ohm: r * (input.length_mm / 1000) * loop,
     voltageDrop_v: final.voltageDrop_v,
     voltageDropPct: final.voltageDropPct,
-    dropLimitPct: dropLimit * 100,
+    dropLimitPct: reportedLimit * 100,
     deratedAmpacity_a: amp.value,
     baseAmpacity_a: amp.base,
     ampacityUtilisationPct: amp.value > 0 ? (input.current_a / amp.value) * 100 : 0,

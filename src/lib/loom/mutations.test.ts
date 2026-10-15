@@ -296,6 +296,20 @@ describe('duplicating a whole branch', () => {
     }
     expect(() => duplicateBranch(loom, 'floating', { nodeId: 'roof_breakout' })).toThrow()
   })
+
+  it('numbers a duplicated segment label instead of repeating it', () => {
+    // seg-roof-st ("Strobe breakout") is the connecting segment rebuilt at the
+    // new attachment point each time — duplicating twice must not leave three
+    // bundles on the drawing all labelled identically "Strobe breakout".
+    let loom = DEMO_LOOM
+    for (let i = 0; i < 2; i++) {
+      loom = duplicateBranch(loom, 'dtm2_strobe', { nodeId: 'roof_breakout' }).loom
+    }
+    const labels = (loom.segments ?? [])
+      .map((s) => s.label)
+      .filter((l): l is string => !!l && l.startsWith('Strobe breakout'))
+    expect(labels.sort()).toEqual(['Strobe breakout', 'Strobe breakout 2', 'Strobe breakout 3'])
+  })
 })
 
 describe('deletion impact', () => {

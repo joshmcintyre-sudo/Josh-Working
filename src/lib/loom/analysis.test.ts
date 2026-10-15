@@ -498,4 +498,47 @@ describe('termination (flush-cut) nodes', () => {
     }
     expect(a.issues.some((i) => i.code === 'circuit_drop_exceeded')).toBe(true)
   })
+
+  it('needs no separate ground run when fed by a chassis-return wire', () => {
+    // A single-wire door switch: the body of the switch grounds through the
+    // door itself, so there is deliberately no ground edge drawn anywhere in
+    // this loom. That must not read as a missing return path.
+    const loom: Loom = {
+      id: 'sense',
+      name: 'sense',
+      revision: 'A',
+      settings: { ...DEFAULT_SETTINGS },
+      nodes: [
+        {
+          id: 'bat',
+          kind: 'source',
+          name: 'Battery',
+          location: 'x',
+          position: { x: 0, y: 0 },
+          source: { nominalVoltage_v: 12, capacity_a: 100 },
+        },
+        {
+          id: 'sw',
+          kind: 'termination',
+          name: 'Door switch',
+          location: 'x',
+          position: { x: 1, y: 0 },
+          load: { continuousCurrent_a: 0.05, duty: 'intermittent' },
+        },
+      ],
+      edges: [
+        {
+          id: 'sense',
+          fromNodeId: 'bat',
+          toNodeId: 'sw',
+          circuitId: 'C-1',
+          length_mm: 1800,
+          class: 'signal',
+          returnPath: 'chassis',
+        },
+      ],
+    }
+    const a = analyseLoom(loom)
+    expect(a.issues.some((i) => i.code === 'no_ground_path')).toBe(false)
+  })
 })

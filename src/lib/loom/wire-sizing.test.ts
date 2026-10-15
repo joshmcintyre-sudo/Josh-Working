@@ -28,6 +28,25 @@ describe('voltage drop budgets', () => {
   it('gives a charging run a tighter budget than a general power run', () => {
     expect(dropLimitFor('charging')).toBeLessThan(dropLimitFor('power'))
   })
+
+  it('reports the real class budget even when a caller tightens dropLimit to force a bigger gauge', () => {
+    // The drop-allocation pass in analyseLoom does exactly this: it passes a
+    // tightened `dropLimit` to make sizeWire land on the next size up for a
+    // path that is only over budget in aggregate. The run's own budget is
+    // still 3 % — the tightened figure is a sizing instruction, not a new
+    // budget — so dropLimitPct (shown on the drawing and read back by the
+    // cumulative-path check) must still say 3 %, not the tightened value.
+    const normal = sizeWire(base)
+    // Mirrors what the allocation pass actually asks for: a quarter less drop
+    // than the chosen size currently makes, which lands on the next size up
+    // rather than on an impossible target.
+    const target = (normal.voltageDropPct * 0.75) / 100
+    const tightened = sizeWire({ ...base, dropLimit: target })
+    expect(normal.dropLimitPct).toBeCloseTo(dropLimitFor('power') * 100, 6)
+    expect(tightened.dropLimitPct).toBeCloseTo(dropLimitFor('power') * 100, 6)
+    // The tightened call still does its job: it picks a bigger conductor.
+    expect(tightened.size!.area_mm2).toBeGreaterThan(normal.size!.area_mm2)
+  })
 })
 
 describe('loop factor', () => {

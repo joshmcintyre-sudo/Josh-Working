@@ -478,6 +478,13 @@ export function duplicateBranch(
   /* ---- clone the branch's own segments ---- */
 
   const takenSegIds = new Set(segments.map((s) => s.id))
+  const takenSegLabels = segments.map((s) => s.label).filter((l): l is string => !!l)
+  const renameSegment = (label: string | undefined): string | undefined => {
+    if (!label) return label
+    const renamed = nextCopyName(label, takenSegLabels)
+    takenSegLabels.push(renamed)
+    return renamed
+  }
   const clonedInternalSegments: LoomSegment[] = internalSegments.map((s) => {
     const newId = freeId('seg', takenSegIds)
     takenSegIds.add(newId)
@@ -486,6 +493,7 @@ export function duplicateBranch(
       id: newId,
       fromNodeId: idMap.get(s.fromNodeId)!,
       toNodeId: idMap.get(s.toNodeId)!,
+      label: renameSegment(s.label),
     }
   })
 
@@ -521,6 +529,7 @@ export function duplicateBranch(
       id: nextSegId(),
       fromNodeId: branchNodeId,
       toNodeId: idMap.get(rootSideOld)!,
+      label: renameSegment(s.label),
     }
   })
   working = { ...working, segments: [...(working.segments ?? []), ...newSegments] }

@@ -895,12 +895,20 @@ export function hasProtectionUpstream(
   return false
 }
 
-/** Is there a route from this node to a ground node? */
+/**
+ * Is there a route from this node to a ground node?
+ *
+ * A node fed by a `returnPath: 'chassis'` run needs no such route — the return
+ * is through the vehicle body at that connection itself (a single-wire switch
+ * grounded through its own body is the common case), so no ground run is ever
+ * drawn for it and none should be expected.
+ */
 export function hasGroundPath(
   nodeId: string,
   nodes: Map<string, LoomNode>,
   edges: LoomEdge[],
 ): boolean {
+  if (edges.some((e) => e.toNodeId === nodeId && e.returnPath === 'chassis')) return true
   const seen = new Set<string>()
   const stack = [nodeId]
   while (stack.length) {
